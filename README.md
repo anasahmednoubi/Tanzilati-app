@@ -8,7 +8,7 @@
 
 ### 1. أنشئ مستودعاً جديداً على GitHub:
 1. افتح [GitHub](https://github.com/new).
-2. اختر اسماً للمستودع، مثلاً: `tanzeelati-app`.
+2. اختر اسماً للمستودع، مثلاً: `Tanzilati-app`.
 3. اتركه **Public** أو **Private** بحسب رغبتك، **ولا** تضع علامة على "Add a README file" لأن المشروع يحتوي عليه بالفعل.
 4. اضغط **Create repository**.
 
@@ -32,7 +32,7 @@ git commit -m "الإصدار الأول: تطبيق تنزيلاتي مع دع�
 git branch -M main
 
 # 5. ربط المستودع بالرابط الخاص بك على جيت هاب
-git remote add origin https://github.com/anasahmednoubi/tanzeelati-app.git
+git remote add origin https://github.com/anasahmednoubi/Tanzilati-app.git
 
 # 6. رفع الكود
 git push -u origin main

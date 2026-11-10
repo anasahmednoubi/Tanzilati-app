@@ -1,0 +1,14 @@
+{
+  "version": "1.1.0",
+  "build": 2,
+  "date": "2026-11-10",
+  "title": "تحديث المزايا الذكية وفحص التحديثات",
+  "features": [
+    "إضافة مربع تحديث التطبيق من GitHub مباشرة داخل تبويب المزيد",
+    "دعم التنقل بالتاتش والسحب يميناً ويساراً بين التبويبات",
+    "الالتقاط التلقائي لروابط الفيديو من الحافظة مع خيارات الجودة",
+    "بناء ونشر ملف APK تلقائياً عبر GitHub Releases"
+  ],
+  "apkUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest/download/Tanzeelati-Debug.apk",
+  "releaseUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest"
+}

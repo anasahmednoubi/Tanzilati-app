@@ -138,6 +138,34 @@ interface HistoryEntry {
   fresh?: boolean;
 }
 
+const APP_VERSION = '1.1.0';
+const APP_BUILD = 2;
+const GITHUB_REPO = 'anasahmednoubi/Tanzilati-app';
+
+const compareSemver = (a: string, b: string): number => {
+  const pa = a.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = b.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+};
+
+interface UpdateInfo {
+  version: string;
+  build?: number;
+  date?: string;
+  title: string;
+  features: string[];
+  apkUrl?: string;
+  releaseUrl?: string;
+  commitSha?: string;
+}
+
 interface CaughtVideoInfo {
   url: string;
   title: string;
@@ -239,6 +267,230 @@ export default function App() {
   // --- Touch Swipe State ---
   const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
+
+  // --- GitHub App Update State ---
+  const [updateStatus, setUpdateStatus] = useState<
+    'idle' | 'checking' | 'available' | 'latest' | 'updating' | 'error'
+  >('idle');
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const updateTimerRef = useRef<number | null>(null);
+
+  const checkForUpdates = async (manual = false) => {
+    if (updateStatus === 'checking' || updateStatus === 'updating') return;
+    if (manual) setUpdateDialogOpen(true);
+    setUpdateStatus('checking');
+
+    try {
+      const cacheBust = Date.now();
+      const [manifestRes, releaseRes, commitRes] = await Promise.allSettled([
+        fetch(
+          `https://raw.githubusercontent.com/${GITHUB_REPO}/main/public/version.json?t=${cacheBust}`,
+          { cache: 'no-store' }
+        ),
+        fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+          cache: 'no-store',
+        }),
+        fetch(`https://api.github.com/repos/${GITHUB_REPO}/commits/main`, {
+          cache: 'no-store',
+        }),
+      ]);
+
+      let remoteManifest: Partial<UpdateInfo> | null = null;
+      if (manifestRes.status === 'fulfilled' && manifestRes.value.ok) {
+        remoteManifest = await manifestRes.value.json();
+      }
+
+      let latestRelease: any = null;
+      if (releaseRes.status === 'fulfilled' && releaseRes.value.ok) {
+        latestRelease = await releaseRes.value.json();
+      }
+
+      let latestCommit: any = null;
+      if (commitRes.status === 'fulfilled' && commitRes.value.ok) {
+        latestCommit = await commitRes.value.json();
+      }
+
+      // 1. Check version.json manifest on GitHub
+      if (remoteManifest && remoteManifest.version) {
+        const isNewerSemver = compareSemver(remoteManifest.version, APP_VERSION) > 0;
+        const isNewerBuild =
+          typeof remoteManifest.build === 'number' && remoteManifest.build > APP_BUILD;
+
+        if (isNewerSemver || isNewerBuild) {
+          const apkAsset = latestRelease?.assets?.find((a: any) =>
+            String(a.name).toLowerCase().endsWith('.apk')
+          );
+          const nextUpdate: UpdateInfo = {
+            version: remoteManifest.version,
+            build: remoteManifest.build,
+            date: remoteManifest.date,
+            title: remoteManifest.title || `تحديث جديد للإصدار ${remoteManifest.version}`,
+            features:
+              Array.isArray(remoteManifest.features) && remoteManifest.features.length > 0
+                ? remoteManifest.features
+                : ['تحسينات عامة في الأداء وإصلاح الأخطاء'],
+            apkUrl:
+              apkAsset?.browser_download_url ||
+              remoteManifest.apkUrl ||
+              latestRelease?.html_url ||
+              `https://github.com/${GITHUB_REPO}/releases/latest`,
+            releaseUrl:
+              remoteManifest.releaseUrl ||
+              latestRelease?.html_url ||
+              `https://github.com/${GITHUB_REPO}/releases`,
+            commitSha: latestCommit?.sha,
+          };
+          setUpdateInfo(nextUpdate);
+          setUpdateStatus('available');
+          if (!manual) {
+            triggerToast('تحديث جديد متاح', `الإصدار ${nextUpdate.version} متاح الآن على GitHub`);
+          }
+          return;
+        }
+      }
+
+      // 2. Check GitHub Releases directly if newer than installed APP_VERSION
+      if (latestRelease && latestRelease.tag_name) {
+        const releaseVer = String(latestRelease.tag_name).replace(/^v/i, '');
+        if (compareSemver(releaseVer, APP_VERSION) > 0) {
+          const apkAsset = latestRelease.assets?.find((a: any) =>
+            String(a.name).toLowerCase().endsWith('.apk')
+          );
+          const parsedFeatures = String(latestRelease.body || '')
+            .split('\n')
+            .map((line) => line.replace(/^[-*•]\s*/, '').trim())
+            .filter(Boolean);
+
+          const nextUpdate: UpdateInfo = {
+            version: releaseVer,
+            title: latestRelease.name || `الإصدار ${releaseVer}`,
+            features:
+              parsedFeatures.length > 0
+                ? parsedFeatures
+                : ['إصدار جديد متاح للتحميل والتثبيت'],
+            apkUrl: apkAsset?.browser_download_url || latestRelease.html_url,
+            releaseUrl: latestRelease.html_url,
+            commitSha: latestCommit?.sha,
+          };
+          setUpdateInfo(nextUpdate);
+          setUpdateStatus('available');
+          if (!manual) {
+            triggerToast('تحديث جديد متاح', `الإصدار ${nextUpdate.version} متاح الآن`);
+          }
+          return;
+        }
+      }
+
+      // 3. Check latest commit SHA on main branch (catches code pushes even without bumping version.json)
+      if (latestCommit && latestCommit.sha) {
+        const savedSha = localStorage.getItem('tanzeelati-commit-sha');
+        if (!savedSha) {
+          try {
+            localStorage.setItem('tanzeelati-commit-sha', latestCommit.sha);
+          } catch {}
+        } else if (savedSha !== latestCommit.sha) {
+          const rawMsg = String(latestCommit.commit?.message || 'تحديث جديد للكود');
+          const msgLines = rawMsg
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean);
+          const apkAsset = latestRelease?.assets?.find((a: any) =>
+            String(a.name).toLowerCase().endsWith('.apk')
+          );
+          const nextUpdate: UpdateInfo = {
+            version: `${APP_VERSION} (${latestCommit.sha.slice(0, 7)})`,
+            title: 'تحديث جديد متاح على GitHub',
+            features: [
+              msgLines[0] || 'تحسينات وتعديلات جديدة على الكود',
+              ...(msgLines.slice(1, 3)),
+              'إصدار APK محدّث جاهز للتنزيل عبر GitHub',
+            ],
+            apkUrl:
+              apkAsset?.browser_download_url ||
+              latestRelease?.html_url ||
+              `https://github.com/${GITHUB_REPO}/actions`,
+            releaseUrl: `https://github.com/${GITHUB_REPO}/commits/main`,
+            commitSha: latestCommit.sha,
+          };
+          setUpdateInfo(nextUpdate);
+          setUpdateStatus('available');
+          if (!manual) {
+            triggerToast('تحديث جديد على GitHub', msgLines[0] || 'يتوفر تحديث جديد للتطبيق');
+          }
+          return;
+        }
+      }
+
+      if (!remoteManifest && !latestRelease && !latestCommit) {
+        setUpdateStatus('error');
+        return;
+      }
+
+      setUpdateInfo(null);
+      setUpdateStatus('latest');
+    } catch {
+      setUpdateStatus('error');
+    }
+  };
+
+  const applyAppUpdate = () => {
+    if (!updateInfo || updateStatus === 'updating') return;
+    setUpdateStatus('updating');
+    setUpdateProgress(0);
+
+    if (updateTimerRef.current) clearInterval(updateTimerRef.current);
+    let p = 0;
+    updateTimerRef.current = window.setInterval(() => {
+      p = Math.min(100, p + 8 + Math.random() * 14);
+      setUpdateProgress(p);
+      if (p >= 100) {
+        if (updateTimerRef.current) clearInterval(updateTimerRef.current);
+        updateTimerRef.current = null;
+
+        if (updateInfo.commitSha) {
+          try {
+            localStorage.setItem('tanzeelati-commit-sha', updateInfo.commitSha);
+          } catch {}
+        }
+
+        const isNativeAndroid =
+          typeof (window as any).Capacitor !== 'undefined' &&
+          (window as any).Capacitor.isNativePlatform?.();
+
+        if (isNativeAndroid && updateInfo.apkUrl) {
+          window.location.href = updateInfo.apkUrl;
+        } else if (updateInfo.apkUrl && updateInfo.apkUrl.endsWith('.apk')) {
+          const a = document.createElement('a');
+          a.href = updateInfo.apkUrl;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }
+
+        setUpdateStatus('latest');
+        setUpdateInfo(null);
+        setUpdateDialogOpen(false);
+        triggerToast('تم التحديث', `تم تجهيز التحديث ${updateInfo.version} بنجاح ✅`);
+
+        if (!isNativeAndroid) {
+          setTimeout(() => {
+            window.location.reload();
+          }, 1200);
+        }
+      }
+    }, 110);
+  };
+
+  useEffect(() => {
+    checkForUpdates(false);
+    return () => {
+      if (updateTimerRef.current) clearInterval(updateTimerRef.current);
+    };
+  }, []);
 
   // Helper to resolve realistic metadata for any detected URL
   const parseVideoMetadata = (targetUrl: string): CaughtVideoInfo => {
@@ -1512,13 +1764,55 @@ export default function App() {
                 </div>
               </div>
 
+              {/* App Update Card (matching إنجازاتي style) */}
+              <div className="card">
+                <b>تحديث التطبيق</b>
+                <button
+                  type="button"
+                  className="srow ghost"
+                  onClick={() => checkForUpdates(true)}
+                >
+                  <span className="l">
+                    <svg
+                      className={updateStatus === 'checking' ? 'upd-spin' : ''}
+                      width="20"
+                      height="20"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                      <path d="M3 3v5h5" />
+                      <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                      <path d="M16 16h5v5" />
+                    </svg>
+                    <span>التحقق من التحديثات</span>
+                  </span>
+                  <span className="v">
+                    {updateStatus === 'available' ? (
+                      <span style={{ color: 'var(--acc)', fontWeight: 700 }}>تحديث متاح</span>
+                    ) : (
+                      <span>الإصدار {APP_VERSION}</span>
+                    )}
+                    <span style={{ display: 'inline-flex', transform: 'rotate(90deg)' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                    </span>
+                  </span>
+                </button>
+              </div>
+
               <div className="card">
                 <b>عن التطبيق</b>
                 <div className="sub" style={{ marginTop: '8px' }}>
                   تنزيلاتي — أداة بسيطة لتحميل الفيديوهات أو استخراج الصوت منها.
                 </div>
                 <div className="sub" style={{ marginTop: '4px' }}>
-                  الإصدار 1.0 · يدعم السحب بالتاتش ورصد الحافظة
+                  الإصدار {APP_VERSION} · يدعم السحب بالتاتش ورصد الحافظة
                 </div>
               </div>
             </>
@@ -1587,6 +1881,7 @@ export default function App() {
           aria-label="المزيد"
           onClick={() => switchTab('H')}
         >
+          {updateStatus === 'available' && <span className="tH-dot" aria-label="تحديث متاح"></span>}
           <svg
             width="24"
             height="24"
@@ -1759,6 +2054,205 @@ export default function App() {
                 فتح ومراجعة في صفحة التحميل
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Professional App Update Dialog Modal (matching إنجازاتي) --- */}
+      {updateDialogOpen && (
+        <div
+          className="dlg-backdrop"
+          onClick={() => {
+            if (updateStatus !== 'updating') setUpdateDialogOpen(false);
+          }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="dlg-card" onClick={(e) => e.stopPropagation()} dir="rtl">
+            {updateStatus === 'checking' && (
+              <>
+                <div className="dlg-badge" aria-hidden="true">
+                  <svg
+                    className="upd-spin"
+                    width="26"
+                    height="26"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                    <path d="M3 3v5h5" />
+                    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                    <path d="M16 16h5v5" />
+                  </svg>
+                </div>
+                <h3 className="dlg-title">جارٍ التحقق من التحديثات</h3>
+                <p className="dlg-desc" style={{ marginBottom: 0 }}>
+                  يتم الآن الاتصال بـ GitHub لفحص آخر إصدار متوفر من تطبيق تنزيلاتي...
+                </p>
+              </>
+            )}
+
+            {updateStatus === 'latest' && (
+              <>
+                <div className="dlg-badge ok" aria-hidden="true">
+                  <svg
+                    width="28"
+                    height="28"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                    <path d="M22 4L12 14.01l-3-3" />
+                  </svg>
+                </div>
+                <h3 className="dlg-title">أنت على أحدث إصدار</h3>
+                <span className="dlg-ver ok">الإصدار {APP_VERSION}</span>
+                <p className="dlg-desc">
+                  تطبيق تنزيلاتي محدّث بالكامل إلى آخر نسخة متوفرة، ولا توجد تحديثات جديدة في الوقت الحالي.
+                </p>
+                <div className="dlg-actions">
+                  <button type="button" onClick={() => setUpdateDialogOpen(false)}>
+                    حسناً
+                  </button>
+                </div>
+              </>
+            )}
+
+            {updateStatus === 'available' && updateInfo && (
+              <>
+                <div className="dlg-badge" aria-hidden="true">
+                  <svg
+                    width="26"
+                    height="26"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
+                  </svg>
+                </div>
+                <h3 className="dlg-title">يتوفر تحديث جديد</h3>
+                <span className="dlg-ver">الإصدار {updateInfo.version}</span>
+                <p className="dlg-desc" style={{ marginBottom: '12px' }}>
+                  {updateInfo.title}
+                </p>
+
+                <div className="dlg-features">
+                  <div className="dlg-features-h">المزايا الجديدة في هذا التحديث:</div>
+                  <ul>
+                    {updateInfo.features.map((feat, idx) => (
+                      <li key={idx}>
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M5 12l5 5 9-10" />
+                        </svg>
+                        <span>{feat}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="dlg-actions">
+                  <button type="button" onClick={applyAppUpdate}>
+                    تحديث التطبيق الآن
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => setUpdateDialogOpen(false)}
+                  >
+                    لاحقاً
+                  </button>
+                </div>
+              </>
+            )}
+
+            {updateStatus === 'updating' && (
+              <>
+                <div className="dlg-badge" aria-hidden="true">
+                  <svg
+                    className="upd-spin"
+                    width="26"
+                    height="26"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                    <path d="M3 3v5h5" />
+                    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                    <path d="M16 16h5v5" />
+                  </svg>
+                </div>
+                <h3 className="dlg-title">جارٍ تحديث التطبيق</h3>
+                <span className="dlg-ver">{Math.floor(updateProgress)}%</span>
+                <div className="bar" style={{ height: '12px', margin: '6px 0 14px' }}>
+                  <div className="fill run" style={{ width: `${updateProgress}%` }}></div>
+                </div>
+                <p className="dlg-desc" style={{ marginBottom: 0 }}>
+                  يتم الآن تجهيز وتنزيل الإصدار الجديد من GitHub...
+                </p>
+              </>
+            )}
+
+            {updateStatus === 'error' && (
+              <>
+                <div className="dlg-badge err" aria-hidden="true">
+                  <svg
+                    width="26"
+                    height="26"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                </div>
+                <h3 className="dlg-title">تعذر الاتصال بـ GitHub</h3>
+                <p className="dlg-desc">
+                  يرجى التأكد من اتصالك بالإنترنت ثم إعادة المحاولة للتحقق من وجود تحديثات جديدة.
+                </p>
+                <div className="dlg-actions">
+                  <button type="button" onClick={() => checkForUpdates(true)}>
+                    إعادة المحاولة
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => setUpdateDialogOpen(false)}
+                  >
+                    إغلاق
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

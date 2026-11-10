@@ -1,0 +1,6 @@
+{
+  "name": "تنزيلاتي - Tanzeelati",
+  "description": "تطبيق حديث وسهل لتحميل مقاطع الفيديو والصوتيات بأعلى جودة مع إدارة التنزيلات ومحاكاة التقدم.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

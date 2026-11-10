@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">تنزيلاتي</string>
+    <string name="title_activity_main">تنزيلاتي</string>
+    <string name="package_name">com.tanzeelati.app</string>
+    <string name="custom_url_scheme">com.tanzeelati.app</string>
+</resources>

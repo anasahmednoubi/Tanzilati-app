@@ -153,13 +153,52 @@ interface UpdateInfo {
   commitSha?: string;
 }
 
+interface ServerFormatOption {
+  key: string;
+  labelAr: string;
+  labelEn: string;
+  descAr: string;
+  descEn: string;
+  sizeText: string;
+  height?: number;
+}
+
+interface ServerMediaInfo {
+  url: string;
+  title: string;
+  author: string;
+  duration: string;
+  durationSec?: number;
+  thumbnail?: string;
+  platformAr: string;
+  platformEn: string;
+  engine: string;
+  videoOptions: ServerFormatOption[];
+  audioOptions: ServerFormatOption[];
+}
+
 interface CaughtVideoInfo {
   url: string;
   title: string;
   author: string;
   duration: string;
   platform: string;
+  thumbnail?: string;
+  videoOptions?: ServerFormatOption[];
+  audioOptions?: ServerFormatOption[];
 }
+
+const DEFAULT_API_BASE = 'https://ais-pre-53fpuawfkh5erpgpui3dm2-620276295533.europe-west3.run.app';
+const apiUrl = (p: string): string => {
+  const isNativeAndroid =
+    typeof (window as any).Capacitor !== 'undefined' &&
+    (window as any).Capacitor.isNativePlatform?.();
+  if (isNativeAndroid) {
+    const base = (import.meta as any).env?.VITE_API_URL || DEFAULT_API_BASE;
+    return `${String(base).replace(/\/$/, '')}${p}`;
+  }
+  return p;
+};
 
 export default function App() {
   // Language ('ar' | 'en')
@@ -232,18 +271,22 @@ export default function App() {
   const [savePath, setSavePath] = useState('~/Downloads');
   const [isChangingPath, setIsChangingPath] = useState(false);
 
-  // Video Details in Main Card (null means sample default)
+  // Video Details in Main Card (null means prompt/default)
   const [customVideoMeta, setCustomVideoMeta] = useState<{
     title: string;
     author: string;
     duration: string;
+    thumbnail?: string;
+    resolvedUrl?: string;
+    videoOptions?: ServerFormatOption[];
+    audioOptions?: ServerFormatOption[];
   } | null>(null);
 
   const currentVideoTitle = customVideoMeta?.title || t.sampleTitle;
   const currentVideoAuthor = customVideoMeta?.author || t.sampleAuthor;
-  const currentVideoDuration = customVideoMeta?.duration || '12:48';
+  const currentVideoDuration = customVideoMeta?.duration || '—';
 
-  // Simulated Download State
+  // Real Server Download State
   const [isDownloading, setIsDownloading] = useState(false);
   const [dlPhase, setDlPhase] = useState<'idle' | 'cancelled' | 'downloading' | 'extracting' | 'complete'>('idle');
   const [progress, setProgress] = useState(0);
@@ -251,6 +294,7 @@ export default function App() {
   const [etaSec, setEtaSec] = useState<number | null>(null);
   const [showRes, setShowRes] = useState(false);
   const timerRef = useRef<number | null>(null);
+  const activeJobIdRef = useRef<string | null>(null);
 
   const stateText =
     dlPhase === 'idle'
@@ -265,21 +309,20 @@ export default function App() {
   const speedText = `${t.speedLabel} ${speedVal ? `${speedVal} MB/s` : '—'}`;
   const etaText = `${t.etaLabel} ${etaSec !== null ? `${etaSec} ${t.secUnit}` : '—'}`;
 
-  // History List
-  const [history, setHistory] = useState<HistoryEntry[]>([
-    {
-      id: 'd1',
-      n: 'محاضرة الشبكات – الجزء الثاني.mp4',
-      enName: 'Computer Networks Lecture – Part 2.mp4',
-      a: false,
-    },
-    {
-      id: 'd2',
-      n: 'مقطع صوتي للمراجعة.mp3',
-      enName: 'Study Review Audio Clip.mp3',
-      a: true,
-    },
-  ]);
+  // History List (persisted)
+  const [history, setHistory] = useState<HistoryEntry[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('dl-history-v1') || 'null');
+      if (Array.isArray(saved)) return saved;
+    } catch {}
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dl-history-v1', JSON.stringify(history));
+    } catch {}
+  }, [history]);
 
   // Settings Sub-Page: null (main settings) | 'font' | 'theme' | 'lang' | 'link' | 'notif'
   const [hSub, setHSub] = useState<'font' | 'theme' | 'lang' | 'link' | 'notif' | null>(null);
@@ -638,54 +681,68 @@ export default function App() {
     };
   }, []);
 
-  // Helper to resolve realistic metadata for any detected URL
+  // Quick local URL preview helper before server metadata arrives
   const parseVideoMetadata = (targetUrl: string, currentLang: AppLang = langRef.current): CaughtVideoInfo => {
     const lower = targetUrl.toLowerCase();
     const isEn = currentLang === 'en';
     let platform = isEn ? 'Video' : 'فيديو';
-    let title = isEn ? 'Programming Basics for Beginners' : 'شرح أساسيات البرمجة للمبتدئين';
-    let author = isEn ? 'Demo Channel' : 'قناة تجريبية';
-    let duration = '12:48';
-
-    if (lower.includes('tiktok.com')) {
-      platform = isEn ? 'TikTok' : 'تيك توك';
-      title = isEn ? 'AI & Coding Tricks 2026' : 'أسرار وحيل البرمجة والذكاء الاصطناعي 2026';
-      author = isEn ? 'Tech TikTok Creator' : 'حساب تيك توك تقني';
-      duration = '00:54';
-    } else if (lower.includes('instagram.com')) {
-      platform = isEn ? 'Instagram' : 'إنستغرام';
-      title = isEn ? 'Reels: Quick Tips for Developers' : 'ريلز: نصائح سريعة للمطورين والمصممين';
-      author = 'Instagram Creator';
-      duration = '01:15';
-    } else if (lower.includes('twitter.com') || lower.includes('x.com')) {
-      platform = isEn ? 'X Platform' : 'منصة X';
-      title = isEn ? 'Tech News Clip on the Web Revolution' : 'مقطع إخباري تقني حول ثورة الويب';
-      author = isEn ? 'Tech News' : 'أخبار التقنية';
-      duration = '02:30';
-    } else if (lower.includes('podcast') || lower.includes('audio') || lower.includes('sound')) {
-      platform = isEn ? 'Podcast' : 'صوتيات';
-      title = isEn ? 'Podcast: Future of Apps & Software' : 'بودكاست: مستقبل التطبيقات والبرمجيات';
-      author = isEn ? 'Knowledge Podcast' : 'بودكاست المعرفة';
-      duration = '28:40';
-    } else if (lower.includes('vimeo')) {
-      platform = 'Vimeo';
-      title = isEn ? 'Nature & Oceans 4K Documentary' : 'وثائقي الطبيعة وسحر المحيطات بجودة 4K';
-      author = 'Earth Studios';
-      duration = '16:20';
-    } else if (!lower.includes('demo') && lower.length > 15) {
-      platform = isEn ? 'Video Clip' : 'مقطع فيديو';
-      title = (isEn ? 'Video: ' : 'فيديو: ') + targetUrl.replace(/https?:\/\/(www\.)?/, '').slice(0, 36) + '...';
-      author = isEn ? 'Extracted Media' : 'محتوى مستخرج';
-      duration = '09:12';
-    }
+    if (lower.includes('tiktok.com')) platform = isEn ? 'TikTok' : 'تيك توك';
+    else if (lower.includes('instagram.com')) platform = isEn ? 'Instagram' : 'إنستغرام';
+    else if (lower.includes('twitter.com') || lower.includes('x.com')) platform = isEn ? 'X Platform' : 'منصة X';
+    else if (lower.includes('youtube.com') || lower.includes('youtu.be')) platform = isEn ? 'YouTube' : 'يوتيوب';
+    else if (lower.includes('facebook.com') || lower.includes('fb.watch')) platform = isEn ? 'Facebook' : 'فيسبوك';
+    else if (lower.includes('soundcloud')) platform = isEn ? 'SoundCloud' : 'ساوند كلاود';
 
     return {
       url: targetUrl,
-      title,
-      author,
-      duration,
+      title: targetUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 44),
+      author: isEn ? 'Loading real details…' : 'جارٍ جلب التفاصيل الحقيقية…',
+      duration: '—',
       platform,
     };
+  };
+
+  const fetchServerInfo = async (targetUrl: string): Promise<ServerMediaInfo | null> => {
+    try {
+      const res = await fetch(apiUrl('/api/info'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: targetUrl }),
+      });
+      if (!res.ok) return null;
+      return (await res.json()) as ServerMediaInfo;
+    } catch {
+      return null;
+    }
+  };
+
+  const openCaughtWithRealInfo = (targetUrl: string) => {
+    const initial = parseVideoMetadata(targetUrl, langRef.current);
+    setCaughtVideo(initial);
+    setCaughtMode('video');
+    setCaughtQuality(OPTIONS_I18N[langRef.current].video[0][0]);
+
+    fetchServerInfo(targetUrl).then((real) => {
+      if (!real) return;
+      const isEn = langRef.current === 'en';
+      setCaughtVideo((prev) =>
+        prev && prev.url === targetUrl
+          ? {
+              url: real.url,
+              title: real.title,
+              author: real.author,
+              duration: real.duration,
+              platform: isEn ? real.platformEn : real.platformAr,
+              thumbnail: real.thumbnail,
+              videoOptions: real.videoOptions,
+              audioOptions: real.audioOptions,
+            }
+          : prev
+      );
+      if (real.videoOptions.length > 0) {
+        setCaughtQuality(real.videoOptions[0].key);
+      }
+    });
   };
 
   // Check clipboard
@@ -710,25 +767,17 @@ export default function App() {
       ) {
         if (text !== lastClipboardRef.current) {
           lastClipboardRef.current = text;
-          const info = parseVideoMetadata(text, langRef.current);
-          setCaughtVideo(info);
-          setCaughtMode('video');
-          setCaughtQuality(OPTIONS_I18N[langRef.current].video[0][0]);
-          triggerToast(curT.linkDetectedToast, curT.linkCaptured(info.title.slice(0, 24)));
+          openCaughtWithRealInfo(text);
+          triggerToast(curT.linkDetectedToast, curT.linkCaptured(text.replace(/^https?:\/\//, '').slice(0, 24)));
         } else if (!silent) {
-          const info = parseVideoMetadata(text, langRef.current);
-          setCaughtVideo(info);
+          openCaughtWithRealInfo(text);
         }
       } else if (!silent) {
         triggerToast(curT.clipboardTitle, curT.clipboardEmpty);
       }
     } catch {
       if (!silent) {
-        const sample = 'https://www.youtube.com/watch?v=prog-basics-2026';
-        lastClipboardRef.current = sample;
-        const info = parseVideoMetadata(sample, langRef.current);
-        setCaughtVideo(info);
-        triggerToast(curT.clipboardTitle, curT.clipboardFallback);
+        triggerToast(curT.warningTitle, curT.clipboardUnsupported, 'bell');
       }
     }
   };
@@ -746,14 +795,12 @@ export default function App() {
     };
   }, []);
 
-  // Simulate copying sample links for instant testing
+  // Open real sample link in bottom sheet for quick testing
   const simulateCopyLink = (sampleUrl: string) => {
     lastClipboardRef.current = sampleUrl;
-    const info = parseVideoMetadata(sampleUrl, lang);
-    setCaughtVideo(info);
-    setCaughtMode('video');
-    setCaughtQuality(OPTIONS.video[0][0]);
-    triggerToast(t.newLinkToast, t.platformCaptured(info.platform));
+    const initial = parseVideoMetadata(sampleUrl, lang);
+    openCaughtWithRealInfo(sampleUrl);
+    triggerToast(t.newLinkToast, t.platformCaptured(initial.platform));
   };
 
   // Load Google fonts dynamically
@@ -882,9 +929,23 @@ export default function App() {
     };
   }, []);
 
+  // Active quality options (server-resolved formats when fetched, else localized defaults)
+  const activeQualityList = (): [string, string, string, string][] => {
+    const serverList = mode === 'video' ? customVideoMeta?.videoOptions : customVideoMeta?.audioOptions;
+    if (serverList && serverList.length > 0) {
+      return serverList.map((o) => [
+        o.key,
+        lang === 'ar' ? o.labelAr : o.labelEn,
+        lang === 'ar' ? o.descAr : o.descEn,
+        o.sizeText,
+      ]);
+    }
+    return OPTIONS[mode];
+  };
+
   // Quality label lookup
   const getQualityLabel = (val: string) => {
-    const opts = OPTIONS[mode];
+    const opts = activeQualityList();
     const found = opts.find((o) => o[0] === val);
     return found ? found[1] : opts[0][1];
   };
@@ -892,74 +953,190 @@ export default function App() {
   // Mode Change
   const handleModeChange = (newMode: 'video' | 'audio') => {
     setMode(newMode);
-    const newOpts = OPTIONS[newMode];
-    setQv(newOpts[0][0]);
+    const serverList = newMode === 'video' ? customVideoMeta?.videoOptions : customVideoMeta?.audioOptions;
+    if (serverList && serverList.length > 0) {
+      setQv(serverList[0].key);
+    } else {
+      setQv(OPTIONS[newMode][0][0]);
+    }
     setDdOpen(false);
   };
 
-  // Handle URL fetch
-  const handleFetch = () => {
-    if (!url.trim()) return;
+  // Handle real URL fetch via /api/info
+  const handleFetch = async () => {
+    const raw = url.trim();
+    if (!raw) {
+      triggerToast(t.warningTitle, t.pasteUrlFirst, 'bell');
+      document.getElementById('url')?.focus();
+      return;
+    }
     setIsFetching(true);
-    setTimeout(() => {
-      const parsed = parseVideoMetadata(url, langRef.current);
-      setCustomVideoMeta({
-        title: parsed.title,
-        author: parsed.author,
-        duration: parsed.duration,
-      });
-      setIsRevealed(true);
-      setIsFetching(false);
-    }, 700);
+    const info = await fetchServerInfo(raw);
+    setIsFetching(false);
+
+    if (!info) {
+      triggerToast(t.warningTitle, t.fetchErrorBody, 'bell');
+      return;
+    }
+
+    setUrl(info.url);
+    setCustomVideoMeta({
+      title: info.title,
+      author: info.author,
+      duration: info.duration,
+      thumbnail: info.thumbnail,
+      resolvedUrl: info.url,
+      videoOptions: info.videoOptions,
+      audioOptions: info.audioOptions,
+    });
+    const list = mode === 'video' ? info.videoOptions : info.audioOptions;
+    if (list && list.length > 0) {
+      setQv(list[0].key);
+    }
+    setIsRevealed(true);
+    triggerToast(t.fetchSuccessToast, t.fetchSuccessBody(info.title.slice(0, 32)));
   };
 
-  // Download simulation
-  const startDownloadSimulation = (fileTitle: string, isAudio: boolean, formatKey: string) => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    setShowRes(false);
-    setIsDownloading(true);
-    setDlPhase(isAudio ? 'extracting' : 'downloading');
-    let p = 0;
-
-    timerRef.current = window.setInterval(() => {
-      p = Math.min(100, p + 0.8 + Math.random() * 2.2);
-      setProgress(p);
-      setSpeedVal((3 + Math.random() * 2).toFixed(1));
-      setEtaSec(Math.max(1, Math.round((100 - p) / 7)));
-
-      if (p >= 100) {
-        if (timerRef.current) clearInterval(timerRef.current);
-        timerRef.current = null;
-        setIsDownloading(false);
-        setDlPhase('complete');
-        setEtaSec(0);
-        setShowRes(true);
-
-        const curT = UI_TEXT[langRef.current];
-        const ext = isAudio ? formatKey.split('-')[0] : 'mp4';
-        const newEntry: HistoryEntry = {
-          id: uid(),
-          n: `${fileTitle.slice(0, 30)}.${ext}`,
-          a: isAudio,
-          fresh: true,
-        };
-        setHistory((prev) => [newEntry, ...prev]);
-        triggerToast(curT.completedToastTitle, curT.completedToastBody(fileTitle.slice(0, 20)));
-      }
-    }, 120);
+  // Trigger real browser/device download of completed server file
+  const triggerDeviceSave = (jobId: string, filename: string) => {
+    const downloadEndpoint = apiUrl(`/api/download/file/${jobId}`);
+    const a = document.createElement('a');
+    a.href = downloadEndpoint;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
-  const handleDownloadToggle = () => {
+  // Real Server Download Job + Live Progress Polling
+  const startRealDownload = async (
+    targetUrl: string,
+    isAudio: boolean,
+    formatKey: string
+  ) => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
+    }
+    setShowRes(false);
+    setProgress(2);
+    setSpeedVal(null);
+    setEtaSec(null);
+    setIsDownloading(true);
+    setDlPhase(isAudio ? 'extracting' : 'downloading');
+
+    try {
+      const startRes = await fetch(apiUrl('/api/download/start'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: targetUrl,
+          mode: isAudio ? 'audio' : 'video',
+          quality: formatKey,
+        }),
+      });
+
+      if (!startRes.ok) {
+        throw new Error('START_FAILED');
+      }
+
+      const { jobId, filename, title } = (await startRes.json()) as {
+        jobId: string;
+        filename: string;
+        title: string;
+      };
+      activeJobIdRef.current = jobId;
+
+      timerRef.current = window.setInterval(async () => {
+        try {
+          const stRes = await fetch(apiUrl(`/api/download/status/${jobId}`));
+          if (!stRes.ok) return;
+          const st = await stRes.json();
+
+          setProgress(typeof st.progress === 'number' ? st.progress : 0);
+          setSpeedVal(st.speedMBs || null);
+          setEtaSec(typeof st.etaSec === 'number' ? st.etaSec : null);
+
+          if (st.phase === 'extracting') setDlPhase('extracting');
+          else if (st.phase === 'downloading') setDlPhase('downloading');
+
+          if (st.status === 'ready') {
+            if (timerRef.current) {
+              clearInterval(timerRef.current);
+              timerRef.current = null;
+            }
+            activeJobIdRef.current = null;
+            setIsDownloading(false);
+            setProgress(100);
+            setDlPhase('complete');
+            setEtaSec(0);
+            setShowRes(true);
+
+            triggerDeviceSave(jobId, st.filename || filename);
+
+            const curT = UI_TEXT[langRef.current];
+            const entryName = st.filename || filename || `${title}.mp4`;
+            const newEntry: HistoryEntry = {
+              id: uid(),
+              n: entryName,
+              a: isAudio,
+              fresh: true,
+            };
+            setHistory((prev) => [newEntry, ...prev]);
+            triggerToast(curT.completedToastTitle, curT.completedToastBody(entryName.slice(0, 28)));
+          } else if (st.status === 'error' || st.status === 'cancelled') {
+            if (timerRef.current) {
+              clearInterval(timerRef.current);
+              timerRef.current = null;
+            }
+            activeJobIdRef.current = null;
+            setIsDownloading(false);
+            setSpeedVal(null);
+            setEtaSec(null);
+            if (st.status === 'error') {
+              const curT = UI_TEXT[langRef.current];
+              setDlPhase('idle');
+              triggerToast(curT.warningTitle, curT.downloadErrorBody, 'bell');
+            }
+          }
+        } catch {}
+      }, 280);
+    } catch {
+      activeJobIdRef.current = null;
+      setIsDownloading(false);
+      setDlPhase('idle');
+      setProgress(0);
+      const curT = UI_TEXT[langRef.current];
+      triggerToast(curT.warningTitle, curT.downloadErrorBody, 'bell');
+    }
+  };
+
+  const handleDownloadToggle = () => {
+    if (isDownloading) {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      if (activeJobIdRef.current) {
+        const jid = activeJobIdRef.current;
+        activeJobIdRef.current = null;
+        fetch(apiUrl(`/api/download/cancel/${jid}`), { method: 'POST' }).catch(() => {});
+      }
       setIsDownloading(false);
       setDlPhase('cancelled');
       setSpeedVal(null);
       setEtaSec(null);
       return;
     }
-    startDownloadSimulation(currentVideoTitle, mode === 'audio', qv);
+
+    const targetUrl = url.trim() || customVideoMeta?.resolvedUrl || '';
+    if (!targetUrl) {
+      triggerToast(t.warningTitle, t.pasteUrlFirst, 'bell');
+      document.getElementById('url')?.focus();
+      return;
+    }
+    startRealDownload(targetUrl, mode === 'audio', qv);
   };
 
   // Apply and start download directly from Caught Video Sheet
@@ -970,13 +1147,17 @@ export default function App() {
       title: caughtVideo.title,
       author: caughtVideo.author,
       duration: caughtVideo.duration,
+      thumbnail: caughtVideo.thumbnail,
+      resolvedUrl: caughtVideo.url,
+      videoOptions: caughtVideo.videoOptions,
+      audioOptions: caughtVideo.audioOptions,
     });
     setIsRevealed(true);
     setMode(caughtMode);
     setQv(caughtQuality);
     setCaughtVideo(null);
     switchTab('D');
-    startDownloadSimulation(caughtVideo.title, caughtMode === 'audio', caughtQuality);
+    startRealDownload(caughtVideo.url, caughtMode === 'audio', caughtQuality);
   };
 
   // Just load the caught video into the input
@@ -987,6 +1168,10 @@ export default function App() {
       title: caughtVideo.title,
       author: caughtVideo.author,
       duration: caughtVideo.duration,
+      thumbnail: caughtVideo.thumbnail,
+      resolvedUrl: caughtVideo.url,
+      videoOptions: caughtVideo.videoOptions,
+      audioOptions: caughtVideo.audioOptions,
     });
     setIsRevealed(true);
     setMode(caughtMode);
@@ -1245,7 +1430,7 @@ export default function App() {
               type="button"
               className="chip"
               style={{ padding: '3px 8px', fontSize: '11px' }}
-              onClick={() => simulateCopyLink('https://tiktok.com/@tech/video/1029384756')}
+              onClick={() => simulateCopyLink('https://www.tiktok.com/@tiktok/video/7106594312292453675')}
             >
               {t.tiktok}
             </button>
@@ -1253,7 +1438,7 @@ export default function App() {
               type="button"
               className="chip"
               style={{ padding: '3px 8px', fontSize: '11px' }}
-              onClick={() => simulateCopyLink('https://youtube.com/watch?v=ai-web-2026')}
+              onClick={() => simulateCopyLink('https://www.youtube.com/watch?v=dQw4w9WgXcQ')}
             >
               {t.youtube}
             </button>
@@ -1261,7 +1446,7 @@ export default function App() {
               type="button"
               className="chip"
               style={{ padding: '3px 8px', fontSize: '11px' }}
-              onClick={() => simulateCopyLink('https://podcast.fm/tech-future-sound')}
+              onClick={() => simulateCopyLink('https://soundcloud.com/forss/flickermood')}
             >
               {t.audioSample}
             </button>
@@ -1299,7 +1484,19 @@ export default function App() {
             <div className={`reveal ${isRevealed ? 'open' : ''}`} id="rv">
               <div>
                 <div className="prev">
-                  <div className="thumb" aria-hidden="true"></div>
+                  <div
+                    className="thumb"
+                    aria-hidden="true"
+                    style={
+                      customVideoMeta?.thumbnail
+                        ? {
+                            backgroundImage: `url(${customVideoMeta.thumbnail})`,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center',
+                          }
+                        : undefined
+                    }
+                  ></div>
                   <div className="pm">
                     <b>{currentVideoTitle}</b>
                     <span>
@@ -1362,7 +1559,7 @@ export default function App() {
               </button>
               <div className="dd-list">
                 <ul id="ddList" role="listbox" aria-labelledby="qLbl">
-                  {OPTIONS[mode].map(([v, labelText]) => (
+                  {activeQualityList().map(([v, labelText]) => (
                     <li
                       key={v}
                       role="option"
@@ -2122,6 +2319,7 @@ export default function App() {
                             'mot-on',
                             'mot-min',
                             'dev-notif',
+                            'dl-history-v1',
                           ].forEach((k) => localStorage.removeItem(k));
                         } catch {}
                         setHistory([]);
@@ -2295,7 +2493,21 @@ export default function App() {
             {/* Video preview card */}
             <div className="card" style={{ padding: '12px', marginBottom: '14px' }}>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <div className="thumb" style={{ width: '90px', height: '52px' }} aria-hidden="true"></div>
+                <div
+                  className="thumb"
+                  style={{
+                    width: '90px',
+                    height: '52px',
+                    ...(caughtVideo.thumbnail
+                      ? {
+                          backgroundImage: `url(${caughtVideo.thumbnail})`,
+                          backgroundSize: 'cover',
+                          backgroundPosition: 'center',
+                        }
+                      : {}),
+                  }}
+                  aria-hidden="true"
+                ></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <b style={{ fontSize: '14px', display: 'block', lineHeight: '1.3' }}>
                     {caughtVideo.title}
@@ -2335,7 +2547,9 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setCaughtMode('video');
-                    setCaughtQuality(OPTIONS.video[0][0]);
+                    setCaughtQuality(
+                      caughtVideo.videoOptions?.[0]?.key || OPTIONS.video[0][0]
+                    );
                   }}
                 >
                   {t.fullVideo}
@@ -2345,7 +2559,9 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setCaughtMode('audio');
-                    setCaughtQuality(OPTIONS.audio[0][0]);
+                    setCaughtQuality(
+                      caughtVideo.audioOptions?.[0]?.key || OPTIONS.audio[0][0]
+                    );
                   }}
                 >
                   {t.audioExtractOnly}
@@ -2359,7 +2575,22 @@ export default function App() {
                 {t.whichQuality}
               </label>
               <div className="q-grid">
-                {OPTIONS[caughtMode].map(([keyVal, label, desc, size]) => (
+                {(caughtMode === 'video' && caughtVideo.videoOptions?.length
+                  ? caughtVideo.videoOptions.map((o) => [
+                      o.key,
+                      lang === 'ar' ? o.labelAr : o.labelEn,
+                      lang === 'ar' ? o.descAr : o.descEn,
+                      o.sizeText,
+                    ])
+                  : caughtMode === 'audio' && caughtVideo.audioOptions?.length
+                    ? caughtVideo.audioOptions.map((o) => [
+                        o.key,
+                        lang === 'ar' ? o.labelAr : o.labelEn,
+                        lang === 'ar' ? o.descAr : o.descEn,
+                        o.sizeText,
+                      ])
+                    : OPTIONS[caughtMode]
+                ).map(([keyVal, label, desc, size]) => (
                   <div
                     key={keyVal}
                     className={`q-opt ${caughtQuality === keyVal ? 'on' : ''}`}

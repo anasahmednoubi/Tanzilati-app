@@ -1,38 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-
-// Quality options dictionary matching user HTML
-const OPTIONS = {
-  video: [
-    ['best', 'أفضل جودة متاحة', 'MP4 · 1080p / 60fps', '~184 MB'],
-    ['1080', '1080p (Full HD)', 'MP4 · عالي الوضوح', '~145 MB'],
-    ['720', '720p (HD)', 'MP4 · جودة متوسطة', '~92 MB'],
-    ['480', '480p', 'MP4 · موفر للبيانات', '~45 MB'],
-    ['360', '360p (أقل حجم)', 'MP4 · حجم صغير جداً', '~22 MB'],
-  ],
-  audio: [
-    ['mp3-320', 'MP3 – جودة عالية (320 kbps)', 'MP3 · أنقى صوت', '~29 MB'],
-    ['mp3-192', 'MP3 – جودة متوسطة (192 kbps)', 'MP3 · جودة معيارية', '~18 MB'],
-    ['m4a', 'M4A – بدون إعادة ضغط', 'M4A / AAC أصلي', '~16 MB'],
-    ['opus', 'Opus – أصغر حجم', 'Opus · فائق الخفة', '~11 MB'],
-  ],
-};
-
-const HINTS = {
-  video: 'يُحفظ الفيديو بصيغة MP4 مع الصوت.',
-  audio: 'يُستخرج الصوت فقط ويُحفظ كملف صوتي.',
-};
-
-const ACC: Record<string, [string, string]> = {
-  green: ['#059669', 'أخضر'],
-  violet: ['#7c3aed', 'بنفسجي'],
-  orange: ['#ea580c', 'برتقالي'],
-  blue: ['#2563eb', 'أزرق'],
-  pink: ['#db2777', 'وردي'],
-};
+import { flushSync } from 'react-dom';
+import {
+  AppLang,
+  OPTIONS_I18N,
+  ACC_LABELS,
+  SZ_I18N,
+  TH_LABELS,
+  UI_TEXT,
+  localizeFeatureLine,
+  parseBilingualReleaseNotes,
+} from './i18n';
 
 const FG: [string, string[]][] = [
   [
-    'خطوط عربية',
+    'arabicFonts',
     [
       'Cairo',
       'Tajawal',
@@ -73,7 +54,7 @@ const FG: [string, string[]][] = [
     ],
   ],
   [
-    'خطوط لاتينية',
+    'latinFonts',
     [
       'Inter',
       'Roboto',
@@ -113,27 +94,13 @@ const ONE = new Set([
   'Pacifico',
 ]);
 
-const SZ: [number, string][] = [
-  [0.8, 'صغير جدًا'],
-  [0.9, 'صغير'],
-  [1, 'متوسط'],
-  [1.15, 'كبير'],
-  [1.3, 'كبير جدًا'],
-  [1.5, 'ضخم'],
-];
-
-const TH_L: Record<string, string> = {
-  auto: 'تلقائي',
-  light: 'فاتح',
-  dark: 'داكن',
-};
-
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
 
 interface HistoryEntry {
   id: string;
   n: string;
+  enName?: string;
   a: boolean;
   fresh?: boolean;
 }
@@ -155,12 +122,32 @@ const compareSemver = (a: string, b: string): number => {
   return 0;
 };
 
+interface RawManifest {
+  version?: string;
+  build?: number;
+  date?: string;
+  title?: string | { ar?: string; en?: string };
+  title_ar?: string;
+  title_en?: string;
+  features?: Array<string | { ar?: string; en?: string }>;
+  features_ar?: string[];
+  features_en?: string[];
+  i18n?: {
+    ar?: { title?: string; features?: string[] };
+    en?: { title?: string; features?: string[] };
+  };
+  apkUrl?: string;
+  releaseUrl?: string;
+}
+
 interface UpdateInfo {
   version: string;
   build?: number;
   date?: string;
-  title: string;
-  features: string[];
+  titleAr: string;
+  titleEn: string;
+  featuresAr: string[];
+  featuresEn: string[];
   apkUrl?: string;
   releaseUrl?: string;
   commitSha?: string;
@@ -175,6 +162,35 @@ interface CaughtVideoInfo {
 }
 
 export default function App() {
+  // Language ('ar' | 'en')
+  const [lang, setLang] = useState<AppLang>(() => {
+    try {
+      return localStorage.getItem('tanzeelati-lang') === 'en' ? 'en' : 'ar';
+    } catch {
+      return 'ar';
+    }
+  });
+  const langRef = useRef<AppLang>(lang);
+  langRef.current = lang;
+
+  const t = UI_TEXT[lang];
+  const OPTIONS = OPTIONS_I18N[lang];
+  const HINTS = {
+    video: t.hintVideo,
+    audio: t.hintAudio,
+  };
+
+  // Sync HTML lang, dir, and title
+  useEffect(() => {
+    const root = document.documentElement;
+    root.lang = lang;
+    root.dir = lang === 'ar' ? 'rtl' : 'ltr';
+    document.title = lang === 'ar' ? 'تنزيلاتي' : 'Tanzeelati';
+    try {
+      localStorage.setItem('tanzeelati-lang', lang);
+    } catch {}
+  }, [lang]);
+
   // Navigation Tabs: 'D' (Download), 'S' (History), 'H' (Settings/More)
   const [curTab, setCurTab] = useState<'D' | 'S' | 'H'>('D');
   const [tabDirection, setTabDirection] = useState<'in-l' | 'in-r' | ''>('');
@@ -212,35 +228,87 @@ export default function App() {
   const [isRevealed, setIsRevealed] = useState(true);
   const [mode, setMode] = useState<'video' | 'audio'>('video');
   const [defMode, setDefMode] = useState<'video' | 'audio'>('video');
-  const [qv, setQv] = useState<string>(OPTIONS.video[0][0]);
+  const [qv, setQv] = useState<string>(OPTIONS_I18N.ar.video[0][0]);
   const [ddOpen, setDdOpen] = useState(false);
   const [savePath, setSavePath] = useState('~/Downloads');
   const [isChangingPath, setIsChangingPath] = useState(false);
 
-  // Video Details in Main Card
-  const [currentVideoTitle, setCurrentVideoTitle] = useState('شرح أساسيات البرمجة للمبتدئين');
-  const [currentVideoAuthor, setCurrentVideoAuthor] = useState('قناة تجريبية');
-  const [currentVideoDuration, setCurrentVideoDuration] = useState('12:48');
+  // Video Details in Main Card (null means sample default)
+  const [customVideoMeta, setCustomVideoMeta] = useState<{
+    title: string;
+    author: string;
+    duration: string;
+  } | null>(null);
+
+  const currentVideoTitle = customVideoMeta?.title || t.sampleTitle;
+  const currentVideoAuthor = customVideoMeta?.author || t.sampleAuthor;
+  const currentVideoDuration = customVideoMeta?.duration || '12:48';
 
   // Simulated Download State
   const [isDownloading, setIsDownloading] = useState(false);
+  const [dlPhase, setDlPhase] = useState<'idle' | 'cancelled' | 'downloading' | 'extracting' | 'complete'>('idle');
   const [progress, setProgress] = useState(0);
-  const [speedText, setSpeedText] = useState('السرعة: —');
-  const [etaText, setEtaText] = useState('المتبقي: —');
-  const [stateText, setStateText] = useState('جاهز للتحميل');
-  const [resText, setResText] = useState('');
+  const [speedVal, setSpeedVal] = useState<string | null>(null);
+  const [etaSec, setEtaSec] = useState<number | null>(null);
   const [showRes, setShowRes] = useState(false);
   const timerRef = useRef<number | null>(null);
 
+  const stateText =
+    dlPhase === 'idle'
+      ? t.readyToDownload
+      : dlPhase === 'cancelled'
+        ? t.cancelled
+        : dlPhase === 'downloading'
+          ? t.downloading
+          : dlPhase === 'extracting'
+            ? t.extractingAudio
+            : t.downloadComplete;
+  const speedText = `${t.speedLabel} ${speedVal ? `${speedVal} MB/s` : '—'}`;
+  const etaText = `${t.etaLabel} ${etaSec !== null ? `${etaSec} ${t.secUnit}` : '—'}`;
+
   // History List
   const [history, setHistory] = useState<HistoryEntry[]>([
-    { id: 'd1', n: 'محاضرة الشبكات – الجزء الثاني.mp4', a: false },
-    { id: 'd2', n: 'مقطع صوتي للمراجعة.mp3', a: true },
+    {
+      id: 'd1',
+      n: 'محاضرة الشبكات – الجزء الثاني.mp4',
+      enName: 'Computer Networks Lecture – Part 2.mp4',
+      a: false,
+    },
+    {
+      id: 'd2',
+      n: 'مقطع صوتي للمراجعة.mp3',
+      enName: 'Study Review Audio Clip.mp3',
+      a: true,
+    },
   ]);
 
-  // Settings Sub-Page: null (main settings) | 'font' | 'theme' | 'dl' | 'link'
-  const [hSub, setHSub] = useState<'font' | 'theme' | 'dl' | 'link' | null>(null);
+  // Settings Sub-Page: null (main settings) | 'font' | 'theme' | 'lang' | 'dl' | 'link' | 'notif'
+  const [hSub, setHSub] = useState<'font' | 'theme' | 'lang' | 'dl' | 'link' | 'notif' | null>(null);
   const [wipeArm, setWipeArm] = useState(false);
+  const [wipeAllArm, setWipeAllArm] = useState(false);
+  const [motOn, setMotOn] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('mot-on') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [motMin, setMotMin] = useState<number>(() => {
+    try {
+      return +(localStorage.getItem('mot-min') || '60') || 60;
+    } catch {
+      return 60;
+    }
+  });
+  const [devNotifOn, setDevNotifOn] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('dev-notif') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [devNotifMsg, setDevNotifMsg] = useState('');
+  const [tourStep, setTourStep] = useState<number>(-1);
 
   // Account & Sync
   const [account, setAccount] = useState<{ g?: string; n?: string; m?: 'g' | 'e' }>(() => {
@@ -256,17 +324,13 @@ export default function App() {
   const [authName, setAuthName] = useState('');
   const [authError, setAuthError] = useState('');
   const [authInfo, setAuthInfo] = useState('');
-  const [toastMsg, setToastMsg] = useState<{ title: string; body: string } | null>(null);
+  const [toastMsg, setToastMsg] = useState<{ title: string; body: string; icon?: 'check' | 'bell' } | null>(null);
 
   // --- Clipboard Catcher State ---
   const [caughtVideo, setCaughtVideo] = useState<CaughtVideoInfo | null>(null);
   const [caughtMode, setCaughtMode] = useState<'video' | 'audio'>('video');
-  const [caughtQuality, setCaughtQuality] = useState<string>(OPTIONS.video[0][0]);
+  const [caughtQuality, setCaughtQuality] = useState<string>(OPTIONS_I18N.ar.video[0][0]);
   const lastClipboardRef = useRef<string>('');
-
-  // --- Touch Swipe State ---
-  const touchStartX = useRef<number | null>(null);
-  const touchStartY = useRef<number | null>(null);
 
   // --- GitHub App Update State ---
   const [updateStatus, setUpdateStatus] = useState<
@@ -277,10 +341,73 @@ export default function App() {
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
   const updateTimerRef = useRef<number | null>(null);
 
+  const extractManifestBilingual = (manifest: RawManifest, versionFallback: string) => {
+    let titleAr =
+      manifest.title_ar ||
+      manifest.i18n?.ar?.title ||
+      (typeof manifest.title === 'object' ? manifest.title?.ar : undefined) ||
+      (typeof manifest.title === 'string' ? manifest.title : '');
+    let titleEn =
+      manifest.title_en ||
+      manifest.i18n?.en?.title ||
+      (typeof manifest.title === 'object' ? manifest.title?.en : undefined) ||
+      (typeof manifest.title === 'string' ? manifest.title : '');
+
+    if (!titleAr && titleEn) titleAr = localizeFeatureLine(titleEn, 'ar');
+    if (!titleEn && titleAr) titleEn = localizeFeatureLine(titleAr, 'en');
+    if (!titleAr) titleAr = `تحديث جديد للإصدار ${versionFallback}`;
+    if (!titleEn) titleEn = `New update to version ${versionFallback}`;
+
+    let featuresAr: string[] = Array.isArray(manifest.features_ar)
+      ? manifest.features_ar.filter(Boolean)
+      : Array.isArray(manifest.i18n?.ar?.features)
+        ? manifest.i18n!.ar!.features!.filter(Boolean)
+        : [];
+    let featuresEn: string[] = Array.isArray(manifest.features_en)
+      ? manifest.features_en.filter(Boolean)
+      : Array.isArray(manifest.i18n?.en?.features)
+        ? manifest.i18n!.en!.features!.filter(Boolean)
+        : [];
+
+    if (Array.isArray(manifest.features) && manifest.features.length > 0) {
+      const fromObjsAr: string[] = [];
+      const fromObjsEn: string[] = [];
+      for (const item of manifest.features) {
+        if (typeof item === 'string') {
+          if (/[\u0600-\u06FF]/.test(item)) {
+            fromObjsAr.push(item);
+            fromObjsEn.push(localizeFeatureLine(item, 'en'));
+          } else {
+            fromObjsEn.push(item);
+            fromObjsAr.push(localizeFeatureLine(item, 'ar'));
+          }
+        } else if (item && typeof item === 'object') {
+          if (item.ar) fromObjsAr.push(item.ar);
+          if (item.en) fromObjsEn.push(item.en);
+        }
+      }
+      if (featuresAr.length === 0) featuresAr = fromObjsAr;
+      if (featuresEn.length === 0) featuresEn = fromObjsEn;
+    }
+
+    if (featuresAr.length === 0 && featuresEn.length > 0) {
+      featuresAr = featuresEn.map((f) => localizeFeatureLine(f, 'ar'));
+    }
+    if (featuresEn.length === 0 && featuresAr.length > 0) {
+      featuresEn = featuresAr.map((f) => localizeFeatureLine(f, 'en'));
+    }
+    if (featuresAr.length === 0) featuresAr = ['تحسينات عامة في الأداء وإصلاح الأخطاء'];
+    if (featuresEn.length === 0) featuresEn = ['General performance improvements and bug fixes'];
+
+    return { titleAr, titleEn, featuresAr, featuresEn };
+  };
+
   const checkForUpdates = async (manual = false) => {
     if (updateStatus === 'checking' || updateStatus === 'updating') return;
     if (manual) setUpdateDialogOpen(true);
     setUpdateStatus('checking');
+
+    const activeText = UI_TEXT[langRef.current];
 
     try {
       const cacheBust = Date.now();
@@ -297,7 +424,7 @@ export default function App() {
         }),
       ]);
 
-      let remoteManifest: Partial<UpdateInfo> | null = null;
+      let remoteManifest: RawManifest | null = null;
       if (manifestRes.status === 'fulfilled' && manifestRes.value.ok) {
         remoteManifest = await manifestRes.value.json();
       }
@@ -322,15 +449,15 @@ export default function App() {
           const apkAsset = latestRelease?.assets?.find((a: any) =>
             String(a.name).toLowerCase().endsWith('.apk')
           );
+          const localized = extractManifestBilingual(remoteManifest, remoteManifest.version);
           const nextUpdate: UpdateInfo = {
             version: remoteManifest.version,
             build: remoteManifest.build,
             date: remoteManifest.date,
-            title: remoteManifest.title || `تحديث جديد للإصدار ${remoteManifest.version}`,
-            features:
-              Array.isArray(remoteManifest.features) && remoteManifest.features.length > 0
-                ? remoteManifest.features
-                : ['تحسينات عامة في الأداء وإصلاح الأخطاء'],
+            titleAr: localized.titleAr,
+            titleEn: localized.titleEn,
+            featuresAr: localized.featuresAr,
+            featuresEn: localized.featuresEn,
             apkUrl:
               apkAsset?.browser_download_url ||
               remoteManifest.apkUrl ||
@@ -345,7 +472,8 @@ export default function App() {
           setUpdateInfo(nextUpdate);
           setUpdateStatus('available');
           if (!manual) {
-            triggerToast('تحديث جديد متاح', `الإصدار ${nextUpdate.version} متاح الآن على GitHub`);
+            const curT = UI_TEXT[langRef.current];
+            triggerToast(curT.updateAvailToastTitle, curT.updateAvailToastBody(nextUpdate.version));
           }
           return;
         }
@@ -358,18 +486,19 @@ export default function App() {
           const apkAsset = latestRelease.assets?.find((a: any) =>
             String(a.name).toLowerCase().endsWith('.apk')
           );
-          const parsedFeatures = String(latestRelease.body || '')
-            .split('\n')
-            .map((line) => line.replace(/^[-*•]\s*/, '').trim())
-            .filter(Boolean);
+          const bilingualNotes = parseBilingualReleaseNotes(String(latestRelease.body || ''));
+          const rawReleaseName = String(latestRelease.name || `الإصدار ${releaseVer}`);
 
           const nextUpdate: UpdateInfo = {
             version: releaseVer,
-            title: latestRelease.name || `الإصدار ${releaseVer}`,
-            features:
-              parsedFeatures.length > 0
-                ? parsedFeatures
-                : ['إصدار جديد متاح للتحميل والتثبيت'],
+            titleAr: /[\u0600-\u06FF]/.test(rawReleaseName)
+              ? rawReleaseName
+              : localizeFeatureLine(rawReleaseName, 'ar'),
+            titleEn: !/[\u0600-\u06FF]/.test(rawReleaseName)
+              ? rawReleaseName
+              : `Release ${releaseVer}`,
+            featuresAr: bilingualNotes.ar,
+            featuresEn: bilingualNotes.en,
             apkUrl: apkAsset?.browser_download_url || latestRelease.html_url,
             releaseUrl: latestRelease.html_url,
             commitSha: latestCommit?.sha,
@@ -377,7 +506,8 @@ export default function App() {
           setUpdateInfo(nextUpdate);
           setUpdateStatus('available');
           if (!manual) {
-            triggerToast('تحديث جديد متاح', `الإصدار ${nextUpdate.version} متاح الآن`);
+            const curT = UI_TEXT[langRef.current];
+            triggerToast(curT.updateAvailToastTitle, curT.updateAvailToastBody(nextUpdate.version));
           }
           return;
         }
@@ -391,7 +521,7 @@ export default function App() {
             localStorage.setItem('tanzeelati-commit-sha', latestCommit.sha);
           } catch {}
         } else if (savedSha !== latestCommit.sha) {
-          const rawMsg = String(latestCommit.commit?.message || 'تحديث جديد للكود');
+          const rawMsg = String(latestCommit.commit?.message || 'New code update');
           const msgLines = rawMsg
             .split('\n')
             .map((l) => l.trim())
@@ -399,13 +529,21 @@ export default function App() {
           const apkAsset = latestRelease?.assets?.find((a: any) =>
             String(a.name).toLowerCase().endsWith('.apk')
           );
+
+          const commitAr = msgLines.slice(0, 3).map((l) => localizeFeatureLine(l, 'ar'));
+          const commitEn = msgLines.slice(0, 3).map((l) => localizeFeatureLine(l, 'en'));
+
           const nextUpdate: UpdateInfo = {
             version: `${APP_VERSION} (${latestCommit.sha.slice(0, 7)})`,
-            title: 'تحديث جديد متاح على GitHub',
-            features: [
-              msgLines[0] || 'تحسينات وتعديلات جديدة على الكود',
-              ...(msgLines.slice(1, 3)),
+            titleAr: 'تحديث جديد متاح على GitHub',
+            titleEn: 'New Update Available on GitHub',
+            featuresAr: [
+              ...(commitAr.length > 0 ? commitAr : ['تحسينات وتعديلات جديدة على الكود']),
               'إصدار APK محدّث جاهز للتنزيل عبر GitHub',
+            ],
+            featuresEn: [
+              ...(commitEn.length > 0 ? commitEn : ['New code improvements and updates']),
+              'Updated APK build ready to download via GitHub',
             ],
             apkUrl:
               apkAsset?.browser_download_url ||
@@ -417,7 +555,11 @@ export default function App() {
           setUpdateInfo(nextUpdate);
           setUpdateStatus('available');
           if (!manual) {
-            triggerToast('تحديث جديد على GitHub', msgLines[0] || 'يتوفر تحديث جديد للتطبيق');
+            const curT = UI_TEXT[langRef.current];
+            triggerToast(
+              curT.updateAvailToastTitle,
+              langRef.current === 'ar' ? nextUpdate.featuresAr[0] : nextUpdate.featuresEn[0]
+            );
           }
           return;
         }
@@ -430,8 +572,12 @@ export default function App() {
 
       setUpdateInfo(null);
       setUpdateStatus('latest');
+      if (manual) {
+        const curT = UI_TEXT[langRef.current];
+        triggerToast(curT.appName, curT.updateLatestToast(APP_VERSION), 'bell');
+      }
     } catch {
-      setUpdateStatus('error');
+      if (activeText) setUpdateStatus('error');
     }
   };
 
@@ -471,10 +617,11 @@ export default function App() {
           document.body.removeChild(a);
         }
 
+        const curT = UI_TEXT[langRef.current];
         setUpdateStatus('latest');
         setUpdateInfo(null);
         setUpdateDialogOpen(false);
-        triggerToast('تم التحديث', `تم تجهيز التحديث ${updateInfo.version} بنجاح ✅`);
+        triggerToast(curT.updateDoneToastTitle, curT.updateDoneToastBody(updateInfo.version));
 
         if (!isNativeAndroid) {
           setTimeout(() => {
@@ -493,42 +640,43 @@ export default function App() {
   }, []);
 
   // Helper to resolve realistic metadata for any detected URL
-  const parseVideoMetadata = (targetUrl: string): CaughtVideoInfo => {
+  const parseVideoMetadata = (targetUrl: string, currentLang: AppLang = langRef.current): CaughtVideoInfo => {
     const lower = targetUrl.toLowerCase();
-    let platform = 'فيديو';
-    let title = 'شرح أساسيات البرمجة للمبتدئين';
-    let author = 'قناة تجريبية';
+    const isEn = currentLang === 'en';
+    let platform = isEn ? 'Video' : 'فيديو';
+    let title = isEn ? 'Programming Basics for Beginners' : 'شرح أساسيات البرمجة للمبتدئين';
+    let author = isEn ? 'Demo Channel' : 'قناة تجريبية';
     let duration = '12:48';
 
     if (lower.includes('tiktok.com')) {
-      platform = 'تيك توك';
-      title = 'أسرار وحيل البرمجة والذكاء الاصطناعي 2026';
-      author = 'حساب تيك توك تقني';
+      platform = isEn ? 'TikTok' : 'تيك توك';
+      title = isEn ? 'AI & Coding Tricks 2026' : 'أسرار وحيل البرمجة والذكاء الاصطناعي 2026';
+      author = isEn ? 'Tech TikTok Creator' : 'حساب تيك توك تقني';
       duration = '00:54';
     } else if (lower.includes('instagram.com')) {
-      platform = 'إنستغرام';
-      title = 'ريلز: نصائح سريعة للمطورين والمصممين';
+      platform = isEn ? 'Instagram' : 'إنستغرام';
+      title = isEn ? 'Reels: Quick Tips for Developers' : 'ريلز: نصائح سريعة للمطورين والمصممين';
       author = 'Instagram Creator';
       duration = '01:15';
     } else if (lower.includes('twitter.com') || lower.includes('x.com')) {
-      platform = 'منصة X';
-      title = 'مقطع إخباري تقني حول ثورة الويب';
-      author = 'أخبار التقنية';
+      platform = isEn ? 'X Platform' : 'منصة X';
+      title = isEn ? 'Tech News Clip on the Web Revolution' : 'مقطع إخباري تقني حول ثورة الويب';
+      author = isEn ? 'Tech News' : 'أخبار التقنية';
       duration = '02:30';
     } else if (lower.includes('podcast') || lower.includes('audio') || lower.includes('sound')) {
-      platform = 'صوتيات';
-      title = 'بودكاست: مستقبل التطبيقات والبرمجيات';
-      author = 'بودكاست المعرفة';
+      platform = isEn ? 'Podcast' : 'صوتيات';
+      title = isEn ? 'Podcast: Future of Apps & Software' : 'بودكاست: مستقبل التطبيقات والبرمجيات';
+      author = isEn ? 'Knowledge Podcast' : 'بودكاست المعرفة';
       duration = '28:40';
     } else if (lower.includes('vimeo')) {
       platform = 'Vimeo';
-      title = 'وثائقي الطبيعة وسحر المحيطات بجودة 4K';
+      title = isEn ? 'Nature & Oceans 4K Documentary' : 'وثائقي الطبيعة وسحر المحيطات بجودة 4K';
       author = 'Earth Studios';
       duration = '16:20';
     } else if (!lower.includes('demo') && lower.length > 15) {
-      platform = 'مقطع فيديو';
-      title = 'فيديو: ' + targetUrl.replace(/https?:\/\/(www\.)?/, '').slice(0, 36) + '...';
-      author = 'محتوى مستخرج';
+      platform = isEn ? 'Video Clip' : 'مقطع فيديو';
+      title = (isEn ? 'Video: ' : 'فيديو: ') + targetUrl.replace(/https?:\/\/(www\.)?/, '').slice(0, 36) + '...';
+      author = isEn ? 'Extracted Media' : 'محتوى مستخرج';
       duration = '09:12';
     }
 
@@ -543,9 +691,10 @@ export default function App() {
 
   // Check clipboard
   const checkClipboard = async (silent = true) => {
+    const curT = UI_TEXT[langRef.current];
     try {
       if (!navigator.clipboard || !navigator.clipboard.readText) {
-        if (!silent) triggerToast('تنبيه', 'خاصية قراءة الحافظة غير مفعلة في هذا المتصفح.');
+        if (!silent) triggerToast(curT.warningTitle, curT.clipboardUnsupported);
         return;
       }
       const text = (await navigator.clipboard.readText()).trim();
@@ -562,26 +711,25 @@ export default function App() {
       ) {
         if (text !== lastClipboardRef.current) {
           lastClipboardRef.current = text;
-          const info = parseVideoMetadata(text);
+          const info = parseVideoMetadata(text, langRef.current);
           setCaughtVideo(info);
           setCaughtMode('video');
-          setCaughtQuality(OPTIONS.video[0][0]);
-          triggerToast('تم رصد رابط!', `تم التقاط: ${info.title.slice(0, 24)}...`);
+          setCaughtQuality(OPTIONS_I18N[langRef.current].video[0][0]);
+          triggerToast(curT.linkDetectedToast, curT.linkCaptured(info.title.slice(0, 24)));
         } else if (!silent) {
-          const info = parseVideoMetadata(text);
+          const info = parseVideoMetadata(text, langRef.current);
           setCaughtVideo(info);
         }
       } else if (!silent) {
-        triggerToast('الحافظة', 'لم يتم العثور على رابط فيديو في الحافظة حالياً.');
+        triggerToast(curT.clipboardTitle, curT.clipboardEmpty);
       }
     } catch {
       if (!silent) {
-        // Fallback for sandboxed iframe
         const sample = 'https://www.youtube.com/watch?v=prog-basics-2026';
         lastClipboardRef.current = sample;
-        const info = parseVideoMetadata(sample);
+        const info = parseVideoMetadata(sample, langRef.current);
         setCaughtVideo(info);
-        triggerToast('الحافظة', 'تم فحص الحافظة وعرض الفيديو المكتشف.');
+        triggerToast(curT.clipboardTitle, curT.clipboardFallback);
       }
     }
   };
@@ -602,11 +750,11 @@ export default function App() {
   // Simulate copying sample links for instant testing
   const simulateCopyLink = (sampleUrl: string) => {
     lastClipboardRef.current = sampleUrl;
-    const info = parseVideoMetadata(sampleUrl);
+    const info = parseVideoMetadata(sampleUrl, lang);
     setCaughtVideo(info);
     setCaughtMode('video');
     setCaughtQuality(OPTIONS.video[0][0]);
-    triggerToast('📋 رصد رابط جديد', `تم التقاط رابط ${info.platform} من الحافظة!`);
+    triggerToast(t.newLinkToast, t.platformCaptured(info.platform));
   };
 
   // Load Google fonts dynamically
@@ -668,7 +816,7 @@ export default function App() {
       root.style.removeProperty('--ab');
     } else {
       root.dataset.acc = accKey;
-      root.style.setProperty('--ab', ACC[accKey][0]);
+      root.style.setProperty('--ab', ACC_LABELS[accKey].color);
     }
   }, [accKey]);
 
@@ -676,43 +824,64 @@ export default function App() {
   const switchTab = (nextTab: 'D' | 'S' | 'H') => {
     if (nextTab === curTab) return;
     const tabOrder = ['D', 'S', 'H'];
-    const dir = tabOrder.indexOf(nextTab) > tabOrder.indexOf(curTab) ? 'in-l' : 'in-r';
+    const isForward = tabOrder.indexOf(nextTab) > tabOrder.indexOf(curTab);
+    const dir = lang === 'ar' ? (isForward ? 'in-l' : 'in-r') : isForward ? 'in-r' : 'in-l';
     setTabDirection(dir);
     setCurTab(nextTab);
     if (nextTab === 'H') setHSub(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Touch Swipe Handlers (RTL aware)
-  const handleTouchStart = (e: React.TouchEvent) => {
-    // Ignore swipe if inside input or if modal open
-    const target = e.target as HTMLElement;
-    if (target.tagName === 'INPUT' || target.closest('.sheet-container')) return;
-    touchStartX.current = e.touches[0].clientX;
-    touchStartY.current = e.touches[0].clientY;
-  };
+  // Document-level Swipe Navigation (RTL & LTR aware)
+  const curTabRef = useRef(curTab);
+  curTabRef.current = curTab;
+  const switchTabRef = useRef(switchTab);
+  switchTabRef.current = switchTab;
 
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    if (touchStartX.current === null || touchStartY.current === null) return;
-    const deltaX = e.changedTouches[0].clientX - touchStartX.current;
-    const deltaY = e.changedTouches[0].clientY - touchStartY.current;
-    touchStartX.current = null;
-    touchStartY.current = null;
-
-    // Minimum distance & horizontal bias
-    if (Math.abs(deltaX) >= 45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.3) {
-      // In RTL:
-      // deltaX < 0: finger dragged left -> advance to next tab (D -> S -> H)
-      // deltaX > 0: finger dragged right -> return to previous tab (H -> S -> D)
-      if (deltaX < 0) {
-        if (curTab === 'D') switchTab('S');
-        else if (curTab === 'S') switchTab('H');
-      } else {
-        if (curTab === 'H') switchTab('S');
-        else if (curTab === 'S') switchTab('D');
+  useEffect(() => {
+    let sx: number | null = null;
+    let sy = 0;
+    let ok = true;
+    const hScroll = (start: Element | null) => {
+      let cur = start as HTMLElement | null;
+      while (cur && cur !== document.body) {
+        const cs = window.getComputedStyle(cur);
+        if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && cur.scrollWidth > cur.clientWidth + 2) {
+          return true;
+        }
+        cur = cur.parentElement;
       }
-    }
-  };
+      return false;
+    };
+    const onStart = (e: TouchEvent) => {
+      const targetEl = e.target as HTMLElement;
+      ok =
+        !(
+          targetEl.closest &&
+          targetEl.closest('input,textarea,select,.sheet-container,.sheet-backdrop,.dlg-backdrop,.upd-sheet')
+        ) && !hScroll(targetEl);
+      sx = e.touches[0].clientX;
+      sy = e.touches[0].clientY;
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (sx === null) return;
+      const dx = e.changedTouches[0].clientX - sx;
+      const dy = e.changedTouches[0].clientY - sy;
+      sx = null;
+      if (!ok || Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.3) return;
+      const order = ['D', 'S', 'H'] as const;
+      const i = order.indexOf(curTabRef.current);
+      const forward = langRef.current === 'en' ? dx < 0 : dx > 0;
+      const next = order[i + (forward ? 1 : -1)];
+      if (next) switchTabRef.current(next);
+    };
+    document.addEventListener('touchstart', onStart, { passive: true });
+    document.addEventListener('touchend', onEnd, { passive: true });
+    return () => {
+      document.removeEventListener('touchstart', onStart);
+      document.removeEventListener('touchend', onEnd);
+    };
+  }, []);
 
   // Quality label lookup
   const getQualityLabel = (val: string) => {
@@ -734,10 +903,12 @@ export default function App() {
     if (!url.trim()) return;
     setIsFetching(true);
     setTimeout(() => {
-      const parsed = parseVideoMetadata(url);
-      setCurrentVideoTitle(parsed.title);
-      setCurrentVideoAuthor(parsed.author);
-      setCurrentVideoDuration(parsed.duration);
+      const parsed = parseVideoMetadata(url, langRef.current);
+      setCustomVideoMeta({
+        title: parsed.title,
+        author: parsed.author,
+        duration: parsed.duration,
+      });
       setIsRevealed(true);
       setIsFetching(false);
     }, 700);
@@ -748,24 +919,24 @@ export default function App() {
     if (timerRef.current) clearInterval(timerRef.current);
     setShowRes(false);
     setIsDownloading(true);
-    setStateText(isAudio ? 'جاري استخراج الصوت…' : 'جاري التحميل…');
+    setDlPhase(isAudio ? 'extracting' : 'downloading');
     let p = 0;
 
     timerRef.current = window.setInterval(() => {
       p = Math.min(100, p + 0.8 + Math.random() * 2.2);
       setProgress(p);
-      setSpeedText(`السرعة: ${(3 + Math.random() * 2).toFixed(1)} MB/s`);
-      setEtaText(`المتبقي: ${Math.max(1, Math.round((100 - p) / 7))} ث`);
+      setSpeedVal((3 + Math.random() * 2).toFixed(1));
+      setEtaSec(Math.max(1, Math.round((100 - p) / 7)));
 
       if (p >= 100) {
         if (timerRef.current) clearInterval(timerRef.current);
         timerRef.current = null;
         setIsDownloading(false);
-        setStateText('اكتمل التحميل');
-        setEtaText('المتبقي: 0 ث');
-        setResText('تم حفظ الملف في Downloads ✅');
+        setDlPhase('complete');
+        setEtaSec(0);
         setShowRes(true);
 
+        const curT = UI_TEXT[langRef.current];
         const ext = isAudio ? formatKey.split('-')[0] : 'mp4';
         const newEntry: HistoryEntry = {
           id: uid(),
@@ -774,7 +945,7 @@ export default function App() {
           fresh: true,
         };
         setHistory((prev) => [newEntry, ...prev]);
-        triggerToast('اكتمل التحميل', `تم حفظ ${fileTitle.slice(0, 20)} بنجاح`);
+        triggerToast(curT.completedToastTitle, curT.completedToastBody(fileTitle.slice(0, 20)));
       }
     }, 120);
   };
@@ -784,9 +955,9 @@ export default function App() {
       clearInterval(timerRef.current);
       timerRef.current = null;
       setIsDownloading(false);
-      setStateText('تم الإلغاء');
-      setSpeedText('السرعة: —');
-      setEtaText('المتبقي: —');
+      setDlPhase('cancelled');
+      setSpeedVal(null);
+      setEtaSec(null);
       return;
     }
     startDownloadSimulation(currentVideoTitle, mode === 'audio', qv);
@@ -796,15 +967,16 @@ export default function App() {
   const handleDownloadFromCaught = () => {
     if (!caughtVideo) return;
     setUrl(caughtVideo.url);
-    setCurrentVideoTitle(caughtVideo.title);
-    setCurrentVideoAuthor(caughtVideo.author);
-    setCurrentVideoDuration(caughtVideo.duration);
+    setCustomVideoMeta({
+      title: caughtVideo.title,
+      author: caughtVideo.author,
+      duration: caughtVideo.duration,
+    });
     setIsRevealed(true);
     setMode(caughtMode);
     setQv(caughtQuality);
     setCaughtVideo(null);
     switchTab('D');
-    // Launch download immediately
     startDownloadSimulation(caughtVideo.title, caughtMode === 'audio', caughtQuality);
   };
 
@@ -812,9 +984,11 @@ export default function App() {
   const handleOpenCaughtInApp = () => {
     if (!caughtVideo) return;
     setUrl(caughtVideo.url);
-    setCurrentVideoTitle(caughtVideo.title);
-    setCurrentVideoAuthor(caughtVideo.author);
-    setCurrentVideoDuration(caughtVideo.duration);
+    setCustomVideoMeta({
+      title: caughtVideo.title,
+      author: caughtVideo.author,
+      duration: caughtVideo.duration,
+    });
     setIsRevealed(true);
     setMode(caughtMode);
     setQv(caughtQuality);
@@ -822,20 +996,101 @@ export default function App() {
     switchTab('D');
   };
 
-  const triggerToast = (title: string, body: string) => {
-    setToastMsg({ title, body });
+  const triggerToast = (title: string, body: string, icon: 'check' | 'bell' = 'check') => {
+    setToastMsg({ title, body, icon });
     setTimeout(() => {
       setToastMsg((prev) => (prev?.title === title ? null : prev));
     }, 3500);
   };
 
-  const handleThemeToggle = () => {
+  // Motivational Notifications Scheduler
+  useEffect(() => {
+    try {
+      localStorage.setItem('mot-on', motOn ? '1' : '0');
+      localStorage.setItem('mot-min', String(motMin));
+    } catch {}
+    if (!motOn) return;
+    let i = 0;
+    const id = window.setInterval(() => {
+      const curT = UI_TEXT[langRef.current];
+      const msg = curT.motMsgs[i++ % curT.motMsgs.length];
+      triggerToast(curT.motReminderTitle, msg, 'bell');
+      try {
+        if (devNotifOn && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          new Notification(curT.appName, { body: msg });
+        }
+      } catch {}
+    }, motMin * 60000);
+    return () => window.clearInterval(id);
+  }, [motOn, motMin, devNotifOn]);
+
+  const toggleDevNotif = async () => {
+    const curT = UI_TEXT[langRef.current];
+    if (devNotifOn) {
+      setDevNotifOn(false);
+      try {
+        localStorage.setItem('dev-notif', '0');
+      } catch {}
+      setDevNotifMsg('');
+      return;
+    }
+    try {
+      if (typeof Notification === 'undefined') {
+        setDevNotifMsg(curT.notifUnsupported);
+        return;
+      }
+      const p = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+      if (p === 'granted') {
+        setDevNotifOn(true);
+        try {
+          localStorage.setItem('dev-notif', '1');
+        } catch {}
+        setDevNotifMsg('');
+        new Notification(curT.appName, { body: curT.notifActivated });
+      } else {
+        setDevNotifMsg(curT.notifDenied);
+      }
+    } catch {
+      setDevNotifMsg(curT.notifError);
+    }
+  };
+
+  const handleThemeToggle = (e?: React.MouseEvent) => {
     setSpinThm(true);
-    setTimeout(() => setSpinThm(false), 550);
-    setThemeState((prev) => {
-      const isDark = prev === 'dark' || (prev === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      return isDark ? 'light' : 'dark';
-    });
+    setTimeout(() => setSpinThm(false), 700);
+    const next: 'light' | 'dark' = isDarkNow() ? 'light' : 'dark';
+    const apply = () => {
+      setThemeState(next);
+      document.documentElement.dataset.theme = next;
+    };
+    const doc = document as any;
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (doc.startViewTransition && !reduced) {
+      try {
+        const r = e && e.currentTarget ? (e.currentTarget as HTMLElement).getBoundingClientRect() : null;
+        const x = r ? r.left + r.width / 2 : window.innerWidth / 2;
+        const y = r ? r.top + r.height / 2 : 0;
+        const rad = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+        const vt = doc.startViewTransition(() => {
+          flushSync(apply);
+        });
+        vt.ready
+          .then(() => {
+            document.documentElement.animate(
+              { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${rad}px at ${x}px ${y}px)`] },
+              { duration: 700, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', pseudoElement: '::view-transition-new(root)' }
+            );
+          })
+          .catch(() => {});
+        return;
+      } catch {}
+    }
+    apply();
+  };
+
+  const handleLanguageSwitch = (nextLang: AppLang) => {
+    if (nextLang === lang) return;
+    setLang(nextLang);
   };
 
   // Account handlers
@@ -843,11 +1098,11 @@ export default function App() {
     const e = authEmail.trim();
     setAuthInfo('');
     if (!EMAIL_RE.test(e)) {
-      setAuthError('اكتب بريدًا إلكترونيًا صحيحًا.');
+      setAuthError(t.invalidEmail);
       return;
     }
     if (authPassword.length < 6) {
-      setAuthError('كلمة المرور 6 أحرف على الأقل.');
+      setAuthError(t.shortPassword);
       return;
     }
     const accObj = {
@@ -862,16 +1117,16 @@ export default function App() {
     setAuthPassword('');
     setAuthError('');
     setAuthInfo('');
-    triggerToast('الحساب', authMode === 'up' ? 'تم إنشاء الحساب' : 'تم تسجيل الدخول');
+    triggerToast(t.accountToastTitle, authMode === 'up' ? t.accountCreated : t.signedIn);
   };
 
   const handleGoogleAuth = () => {
-    const accObj = { g: 'Google User', n: 'مستخدم جوجل', m: 'g' as const };
+    const accObj = { g: 'Google User', n: t.googleUser, m: 'g' as const };
     setAccount(accObj);
     try {
       localStorage.setItem('link-v1', JSON.stringify(accObj));
     } catch {}
-    triggerToast('الحساب', 'تم الربط بجوجل');
+    triggerToast(t.accountToastTitle, t.googleLinked);
   };
 
   const handleUnlink = () => {
@@ -879,7 +1134,7 @@ export default function App() {
     try {
       localStorage.removeItem('link-v1');
     } catch {}
-    triggerToast('الحساب', 'تم تسجيل الخروج');
+    triggerToast(t.accountToastTitle, t.signOutToast);
   };
 
   const isLinked = Boolean(account.g);
@@ -896,75 +1151,117 @@ export default function App() {
     return () => document.removeEventListener('click', close);
   }, []);
 
+  const backArrowTransform = lang === 'en' ? 'rotate(90deg)' : 'rotate(-90deg)';
+  const rowChevronTransform = lang === 'en' ? 'rotate(-90deg)' : 'rotate(90deg)';
+
+  const activeUpdateTitle = updateInfo
+    ? lang === 'ar'
+      ? updateInfo.titleAr
+      : updateInfo.titleEn
+    : '';
+  const activeUpdateFeatures = updateInfo
+    ? lang === 'ar'
+      ? updateInfo.featuresAr
+      : updateInfo.featuresEn
+    : [];
+
   return (
-    <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="min-h-screen">
+    <div className="min-h-screen">
       <main>
-        {/* Header matching exact HTML */}
+        {/* Header with new brand logo + quick language toggle + circular ripple theme button */}
         <div className="hd">
           <div className="brand">
-            <svg className="logo" width="40" height="40" viewBox="0 0 48 48" aria-hidden="true">
+            <svg className="logo" width="42" height="37" viewBox="0 3 48 42" aria-hidden="true">
               <rect
                 x="2"
-                y="2"
+                y="5"
                 width="44"
-                height="44"
+                height="38"
                 rx="13"
-                fill="var(--lbg)"
+                fill="var(--card)"
                 stroke="var(--lbd)"
                 strokeWidth="1.2"
               />
-              <circle
-                cx="24"
-                cy="25"
-                r="13"
+              <rect x="6" y="9" width="36" height="30" rx="9" fill="var(--ab, #059669)" />
+              <path
+                className="arrow"
+                d="M24 14.5v12M18 21.5l6 6 6-6"
                 fill="none"
-                stroke="var(--lfg)"
-                strokeOpacity=".28"
-                strokeWidth="4"
-              />
-              <circle
-                className="arc"
-                cx="24"
-                cy="25"
-                r="13"
-                fill="none"
-                stroke="var(--lfg)"
-                strokeWidth="4"
+                stroke="var(--lar)"
+                strokeWidth="3.4"
                 strokeLinecap="round"
-                strokeDasharray="61 82"
-                transform="rotate(-90 24 25)"
+                strokeLinejoin="round"
               />
               <path
-                d="M24 18v11M19.5 25l4.5 4.5 4.5-4.5"
+                className="tray"
+                d="M18 33h12"
                 fill="none"
-                stroke="var(--lfg)"
-                strokeWidth="3.2"
+                stroke="var(--lar)"
+                strokeWidth="3.4"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
             </svg>
-            <h1>تنزيلاتي</h1>
+            <h1>{t.appName}</h1>
           </div>
-          <button
-            id="thm"
-            className={spinThm ? 'spin' : ''}
-            onClick={handleThemeToggle}
-            aria-label="تبديل الوضع الليلي"
-          >
-            {isDarkNow() ? (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <circle cx="12" cy="12" r="4" />
-                <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              id="langBtn"
+              type="button"
+              onClick={() => handleLanguageSwitch(lang === 'ar' ? 'en' : 'ar')}
+              aria-label={t.appLanguage}
+              title={t.appLanguage}
+              style={{
+                background: 'var(--card)',
+                color: 'var(--text)',
+                border: '1px solid var(--line)',
+                borderRadius: '999px',
+                height: '42px',
+                padding: '0 12px',
+                fontSize: '13px',
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+              }}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
               </svg>
-            ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z" />
-              </svg>
-            )}
-          </button>
+              <span>{lang === 'ar' ? 'EN' : 'ع'}</span>
+            </button>
+            <button
+              id="thm"
+              className={spinThm ? 'spin' : ''}
+              onClick={handleThemeToggle}
+              aria-label={t.toggleThemeAria}
+            >
+              {isDarkNow() ? (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+                </svg>
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z" />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
 
-        <p className="sub lead">الصق الرابط، اختر الجودة، وحمّل.</p>
+        <p className="sub lead">{t.tagline}</p>
 
         {/* Quick Clipboard Detection Bar & Touch indicator */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -972,24 +1269,24 @@ export default function App() {
             type="button"
             className="clip-chip"
             onClick={() => checkClipboard(false)}
-            title="فحص الحافظة تلقائياً لالتقاط روابط الفيديو"
+            title={t.checkClipboardTitle}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
               <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
             </svg>
-            <span>فحص رابط من الحافظة</span>
+            <span>{t.checkClipboardBtn}</span>
           </button>
 
           <div className="flex items-center gap-1.5 text-xs text-[var(--mute)]">
-            <span style={{ fontSize: '12px' }}>محاكاة نسخ:</span>
+            <span style={{ fontSize: '12px' }}>{t.simulateCopy}</span>
             <button
               type="button"
               className="chip"
               style={{ padding: '3px 8px', fontSize: '11px' }}
               onClick={() => simulateCopyLink('https://tiktok.com/@tech/video/1029384756')}
             >
-              تيك توك
+              {t.tiktok}
             </button>
             <button
               type="button"
@@ -997,7 +1294,7 @@ export default function App() {
               style={{ padding: '3px 8px', fontSize: '11px' }}
               onClick={() => simulateCopyLink('https://youtube.com/watch?v=ai-web-2026')}
             >
-              يوتيوب
+              {t.youtube}
             </button>
             <button
               type="button"
@@ -1005,13 +1302,13 @@ export default function App() {
               style={{ padding: '3px 8px', fontSize: '11px' }}
               onClick={() => simulateCopyLink('https://podcast.fm/tech-future-sound')}
             >
-              صوت MP3
+              {t.audioSample}
             </button>
           </div>
         </div>
 
         {/* Touch Swipe Dots Navigation Indicator */}
-        <div className="swipe-dots" aria-label="مؤشر التبويب النشط (اسحب بالتاتش للتنقل)">
+        <div className="swipe-dots" aria-label={t.swipeIndicatorAria}>
           <div className={`swipe-dot ${curTab === 'D' ? 'on' : ''}`} onClick={() => switchTab('D')}></div>
           <div className={`swipe-dot ${curTab === 'S' ? 'on' : ''}`} onClick={() => switchTab('S')}></div>
           <div className={`swipe-dot ${curTab === 'H' ? 'on' : ''}`} onClick={() => switchTab('H')}></div>
@@ -1021,7 +1318,7 @@ export default function App() {
         <div id="pD" className={`${curTab === 'D' ? '' : 'hide'} ${tabDirection}`}>
           <section className="card">
             <label className="t" htmlFor="url">
-              رابط الفيديو
+              {t.videoUrlLabel}
             </label>
             <div className="row">
               <input
@@ -1035,7 +1332,7 @@ export default function App() {
                 onKeyDown={(e) => e.key === 'Enter' && handleFetch()}
               />
               <button id="fetch" disabled={isFetching} onClick={handleFetch}>
-                {isFetching ? 'جاري الجلب…' : 'جلب'}
+                {isFetching ? t.fetching : t.fetch}
               </button>
             </div>
             <div className={`reveal ${isRevealed ? 'open' : ''}`} id="rv">
@@ -1063,7 +1360,7 @@ export default function App() {
                 role="tab"
                 onClick={() => handleModeChange('video')}
               >
-                فيديو
+                {t.videoTab}
               </button>
               <button
                 className={mode === 'audio' ? 'on' : ''}
@@ -1071,12 +1368,12 @@ export default function App() {
                 role="tab"
                 onClick={() => handleModeChange('audio')}
               >
-                صوت فقط
+                {t.audioTab}
               </button>
             </div>
 
             <label className="t" id="qLbl">
-              الجودة
+              {t.qualityLabel}
             </label>
             <div className={`dd ${ddOpen ? 'open' : ''}`} id="dd">
               <button
@@ -1104,7 +1401,7 @@ export default function App() {
               </button>
               <div className="dd-list">
                 <ul id="ddList" role="listbox" aria-labelledby="qLbl">
-                  {OPTIONS[mode].map(([v, t]) => (
+                  {OPTIONS[mode].map(([v, labelText]) => (
                     <li
                       key={v}
                       role="option"
@@ -1116,7 +1413,7 @@ export default function App() {
                         setDdOpen(false);
                       }}
                     >
-                      <span>{t}</span>
+                      <span>{labelText}</span>
                       <svg
                         width="18"
                         height="18"
@@ -1153,20 +1450,20 @@ export default function App() {
                     onClick={() => setIsChangingPath(false)}
                     style={{ padding: '6px 12px', fontSize: '13px' }}
                   >
-                    حفظ
+                    {t.save}
                   </button>
                 </div>
               ) : (
                 <>
                   <span>
-                    الحفظ في <code>{savePath}</code>
+                    {t.saveIn} <code>{savePath}</code>
                   </span>
                   <button
                     className="ghost"
                     type="button"
                     onClick={() => setIsChangingPath(true)}
                   >
-                    تغيير
+                    {t.change}
                   </button>
                 </>
               )}
@@ -1190,7 +1487,7 @@ export default function App() {
             >
               <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
             </svg>
-            <span id="goT">{isDownloading ? 'إلغاء' : 'تحميل'}</span>
+            <span id="goT">{isDownloading ? t.cancel : t.download}</span>
           </button>
 
           <section className="card" aria-live="polite">
@@ -1210,7 +1507,7 @@ export default function App() {
               <span id="eta">{etaText}</span>
             </div>
             <div className={`result ${showRes ? 'show' : ''}`} id="res">
-              {resText}
+              {t.savedResult}
             </div>
           </section>
         </div>
@@ -1218,22 +1515,22 @@ export default function App() {
         {/* Tab: History (#pS) */}
         <div id="pS" className={`${curTab === 'S' ? '' : 'hide'} ${tabDirection}`}>
           <section className="card">
-            <b style={{ fontSize: '18px' }}>التحميلات السابقة</b>
+            <b style={{ fontSize: '18px' }}>{t.historyTitle}</b>
             <div className="sub" style={{ margin: '2px 0 6px' }}>
-              {history.length} ملف
+              {t.filesCount(history.length)}
             </div>
             {history.length ? (
               history.map((h, i) => (
                 <div key={h.id} className={`q ${h.fresh && i === 0 ? 'new' : ''}`}>
                   <div className="n">
                     <div className="ic">{h.a ? '♪' : '▶'}</div>
-                    <span>{h.n}</span>
+                    <span>{lang === 'en' && h.enName ? h.enName : h.n}</span>
                   </div>
-                  <span className="s">اكتمل</span>
+                  <span className="s">{t.completedBadge}</span>
                 </div>
               ))
             ) : (
-              <div className="empty">لا توجد تحميلات بعد. الصق رابطاً وابدأ.</div>
+              <div className="empty">{t.emptyHistory}</div>
             )}
           </section>
         </div>
@@ -1244,20 +1541,41 @@ export default function App() {
             /* Settings Sub-Pages */
             <div>
               <div className="back">
-                <button onClick={() => setHSub(null)} aria-label="رجوع">
-                  <span style={{ display: 'inline-flex', transform: 'rotate(-90deg)' }}>
+                <button onClick={() => setHSub(null)} aria-label={t.backAria}>
+                  <span style={{ display: 'inline-flex', transform: backArrowTransform }}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M6 9l6 6 6-6" />
                     </svg>
                   </span>
                 </button>
-                <b>
-                  {hSub === 'font' && 'الخط'}
-                  {hSub === 'theme' && 'المظهر'}
-                  {hSub === 'dl' && 'التحميل'}
-                  {hSub === 'link' && 'ربط'}
-                </b>
+                <b>{t.subTitles[hSub]}</b>
               </div>
+
+              {/* Sub-page: Language */}
+              {hSub === 'lang' && (
+                <div className="card">
+                  <b>{t.appLanguage}</b>
+                  <div className="chips" style={{ marginTop: '10px' }}>
+                    <button
+                      type="button"
+                      className={`chip ${lang === 'ar' ? 'on' : ''}`}
+                      onClick={() => handleLanguageSwitch('ar')}
+                    >
+                      {t.langArabic}
+                    </button>
+                    <button
+                      type="button"
+                      className={`chip ${lang === 'en' ? 'on' : ''}`}
+                      onClick={() => handleLanguageSwitch('en')}
+                    >
+                      {t.langEnglish}
+                    </button>
+                  </div>
+                  <p className="hint" style={{ marginTop: '10px' }}>
+                    {t.languageHint}
+                  </p>
+                </div>
+              )}
 
               {/* Sub-page: Theme */}
               {hSub === 'theme' && (
@@ -1270,22 +1588,22 @@ export default function App() {
                           className={`chip ${theme === k ? 'on' : ''}`}
                           onClick={() => setThemeState(k)}
                         >
-                          {TH_L[k]}
+                          {TH_LABELS[lang][k]}
                         </button>
                       ))}
                     </div>
                   </div>
                   <div className="card">
-                    <b>لون التطبيق</b>
-                    <div className="sw" role="radiogroup" aria-label="لون التطبيق">
-                      {Object.keys(ACC).map((c) => (
+                    <b>{t.appColor}</b>
+                    <div className="sw" role="radiogroup" aria-label={t.appColor}>
+                      {Object.keys(ACC_LABELS).map((c) => (
                         <button
                           key={c}
                           className="dot"
-                          style={{ '--c': ACC[c][0] } as React.CSSProperties}
+                          style={{ '--c': ACC_LABELS[c].color } as React.CSSProperties}
                           role="radio"
                           aria-checked={accKey === c}
-                          aria-label={ACC[c][1]}
+                          aria-label={lang === 'ar' ? ACC_LABELS[c].ar : ACC_LABELS[c].en}
                           onClick={() => setAccKey(c)}
                         ></button>
                       ))}
@@ -1298,7 +1616,7 @@ export default function App() {
               {hSub === 'font' && (
                 <div className="card">
                   <div className="sub" style={{ margin: '0 0 8px' }}>
-                    شكل الخط
+                    {t.fontStyle}
                   </div>
                   <button
                     className="fdd"
@@ -1312,7 +1630,7 @@ export default function App() {
                     }}
                   >
                     <span style={fontFamily ? { fontFamily: `'${fontFamily}', sans-serif` } : {}}>
-                      {fontFamily || 'الافتراضي'}
+                      {fontFamily || t.defaultLabel}
                     </span>
                     <span style={{ display: 'inline-flex' }}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
@@ -1330,11 +1648,13 @@ export default function App() {
                           setFOpen(false);
                         }}
                       >
-                        <span>الافتراضي</span>
+                        <span>{t.defaultLabel}</span>
                       </button>
                       {FG.map((g, gi) => (
                         <React.Fragment key={g[0]}>
-                          <div className="fg">{g[0]}</div>
+                          <div className="fg">
+                            {g[0] === 'arabicFonts' ? t.arabicFonts : t.latinFonts}
+                          </div>
                           {g[1].map((fontName) => (
                             <button
                               key={fontName}
@@ -1355,7 +1675,7 @@ export default function App() {
                   )}
 
                   <div className="sub" style={{ margin: '12px 0 8px' }}>
-                    حجم الخط
+                    {t.fontSize}
                   </div>
                   <button
                     className="fdd"
@@ -1366,8 +1686,10 @@ export default function App() {
                     }}
                   >
                     <span style={{ fontSize: `${16 * fontSizeScale}px` }}>
-                      {(SZ.find((x) => x[0] === fontSizeScale) || SZ[2])[1]} ·{' '}
-                      {Math.round(fontSizeScale * 100)}%
+                      {lang === 'ar'
+                        ? (SZ_I18N.find((x) => x[0] === fontSizeScale) || SZ_I18N[2])[1]
+                        : (SZ_I18N.find((x) => x[0] === fontSizeScale) || SZ_I18N[2])[2]}{' '}
+                      · {Math.round(fontSizeScale * 100)}%
                     </span>
                     <span style={{ display: 'inline-flex' }}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
@@ -1378,7 +1700,7 @@ export default function App() {
 
                   {sOpen && (
                     <div className="fpanel">
-                      {SZ.map((x) => (
+                      {SZ_I18N.map((x) => (
                         <button
                           key={x[0]}
                           className={`fi ${fontSizeScale === x[0] ? 'on' : ''}`}
@@ -1388,7 +1710,7 @@ export default function App() {
                             setSOpen(false);
                           }}
                         >
-                          <span>{x[1]}</span>
+                          <span>{lang === 'ar' ? x[1] : x[2]}</span>
                           <span>{Math.round(x[0] * 100)}%</span>
                         </button>
                       ))}
@@ -1401,7 +1723,7 @@ export default function App() {
               {hSub === 'dl' && (
                 <>
                   <div className="card">
-                    <b>النوع الافتراضي</b>
+                    <b>{t.defaultType}</b>
                     <div className="chips" style={{ margin: '10px 0 0' }}>
                       {(['video', 'audio'] as const).map((m) => (
                         <button
@@ -1412,13 +1734,13 @@ export default function App() {
                             handleModeChange(m);
                           }}
                         >
-                          {m === 'video' ? 'فيديو' : 'صوت فقط'}
+                          {m === 'video' ? t.videoTab : t.audioTab}
                         </button>
                       ))}
                     </div>
                   </div>
                   <div className="card">
-                    <b>مكان الحفظ</b>
+                    <b>{t.saveLocation}</b>
                     <div className="dir" style={{ border: 0, paddingTop: '6px', marginTop: '6px' }}>
                       <span>
                         <code>{savePath}</code>
@@ -1428,9 +1750,70 @@ export default function App() {
                         type="button"
                         onClick={() => setIsChangingPath(!isChangingPath)}
                       >
-                        تغيير
+                        {t.change}
                       </button>
                     </div>
+                  </div>
+                </>
+              )}
+
+              {/* Sub-page: Notifications */}
+              {hSub === 'notif' && (
+                <>
+                  <div className="card">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+                      <b>{t.motivationalNotifications}</b>
+                      <button
+                        type="button"
+                        className={`swt ${motOn ? 'on' : ''}`}
+                        role="switch"
+                        aria-checked={motOn}
+                        onClick={() => setMotOn((v) => !v)}
+                      >
+                        <i></i>
+                      </button>
+                    </div>
+                    <div className="sub" style={{ marginTop: '6px' }}>
+                      {t.motivationalDesc}
+                    </div>
+                    {motOn && (
+                      <>
+                        <div className="sub" style={{ marginTop: '12px' }}>
+                          {t.notifInterval}
+                        </div>
+                        <div className="chips" style={{ margin: '8px 0 0' }}>
+                          {t.motIntervals.map(([m, label]) => (
+                            <button
+                              key={m}
+                              type="button"
+                              className={`chip ${motMin === m ? 'on' : ''}`}
+                              onClick={() => setMotMin(m)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <div className="card">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+                      <b>{t.showDeviceNotif}</b>
+                      <button
+                        type="button"
+                        className={`swt ${devNotifOn ? 'on' : ''}`}
+                        role="switch"
+                        aria-checked={devNotifOn}
+                        onClick={toggleDevNotif}
+                      >
+                        <i></i>
+                      </button>
+                    </div>
+                    {devNotifMsg && (
+                      <div className="sub" style={{ marginTop: '8px' }}>
+                        {devNotifMsg}
+                      </div>
+                    )}
                   </div>
                 </>
               )}
@@ -1459,19 +1842,19 @@ export default function App() {
                             {account.g}
                           </div>
                           <div style={{ color: 'var(--ok)', fontSize: '13px', marginTop: '2px' }}>
-                            مرتبط
+                            {t.linked}
                           </div>
                         </div>
                       </div>
 
                       <div className="sync">
-                        <span className="sub">تمت المزامنة</span>
+                        <span className="sub">{t.synced}</span>
                         <button
                           className="chip"
                           style={{ flex: 'none' }}
-                          onClick={() => triggerToast('المزامنة', 'تمت مزامنة البيانات')}
+                          onClick={() => triggerToast(t.syncToastTitle, t.syncToastBody)}
                         >
-                          مزامنة الآن
+                          {t.syncNow}
                         </button>
                       </div>
 
@@ -1480,18 +1863,18 @@ export default function App() {
                         style={{ width: '100%', marginTop: '14px' }}
                         onClick={handleUnlink}
                       >
-                        تسجيل الخروج
+                        {t.signOut}
                       </button>
                       <div className="sub" style={{ marginTop: '12px' }}>
-                        يُحفظ سجل تنزيلاتك على حسابك، فيظهر على أي جهاز تفتح منه التطبيق بنفس الحساب.
+                        {t.linkNoteSignedIn}
                       </div>
                     </>
                   ) : (
                     <>
                       <div className="chips">
                         {[
-                          ['in', 'تسجيل الدخول'],
-                          ['up', 'حساب جديد'],
+                          ['in', t.signIn],
+                          ['up', t.newAccount],
                         ].map(([modeVal, label]) => (
                           <button
                             key={modeVal}
@@ -1511,11 +1894,11 @@ export default function App() {
                         <div className="row" style={{ marginTop: '10px' }}>
                           <input
                             type="text"
-                            placeholder="الاسم (اختياري)"
+                            placeholder={t.namePlaceholder}
                             autoComplete="name"
                             value={authName}
                             onChange={(e) => setAuthName(e.target.value)}
-                            style={{ direction: 'rtl', textAlign: 'start' }}
+                            style={{ direction: lang === 'ar' ? 'rtl' : 'ltr', textAlign: 'start' }}
                           />
                         </div>
                       )}
@@ -1523,7 +1906,7 @@ export default function App() {
                       <div className="row" style={{ marginTop: '10px' }}>
                         <input
                           type="email"
-                          placeholder="البريد الإلكتروني"
+                          placeholder={t.emailPlaceholder}
                           autoComplete="email"
                           value={authEmail}
                           onChange={(e) => setAuthEmail(e.target.value)}
@@ -1533,7 +1916,7 @@ export default function App() {
                       <div className="row" style={{ marginTop: '10px' }}>
                         <input
                           type="password"
-                          placeholder="كلمة المرور"
+                          placeholder={t.passwordPlaceholder}
                           autoComplete={authMode === 'up' ? 'new-password' : 'current-password'}
                           value={authPassword}
                           onChange={(e) => setAuthPassword(e.target.value)}
@@ -1554,7 +1937,7 @@ export default function App() {
                       )}
 
                       <button style={{ width: '100%', marginTop: '12px' }} onClick={handleAuthSubmit}>
-                        {authMode === 'up' ? 'إنشاء الحساب' : 'تسجيل الدخول'}
+                        {authMode === 'up' ? t.createAccountBtn : t.signIn}
                       </button>
 
                       {authMode === 'in' && (
@@ -1562,18 +1945,18 @@ export default function App() {
                           className="linkbtn"
                           onClick={() => {
                             if (!EMAIL_RE.test(authEmail.trim())) {
-                              setAuthError('اكتب بريدًا إلكترونيًا صحيحًا.');
+                              setAuthError(t.invalidEmail);
                             } else {
                               setAuthError('');
-                              setAuthInfo('هذه معاينة: لا يُرسل بريد فعلي هنا.');
+                              setAuthInfo(t.previewResetNote);
                             }
                           }}
                         >
-                          نسيت كلمة المرور؟
+                          {t.forgotPassword}
                         </button>
                       )}
 
-                      <div className="or">أو</div>
+                      <div className="or">{t.or}</div>
 
                       <button className="ghost gbtn" onClick={handleGoogleAuth}>
                         <span
@@ -1588,11 +1971,11 @@ export default function App() {
                         >
                           G
                         </span>
-                        <span>المتابعة مع جوجل</span>
+                        <span>{t.continueWithGoogle}</span>
                       </button>
 
                       <div className="sub" style={{ marginTop: '12px' }}>
-                        هذه معاينة: لا يتم التحقق من كلمة المرور هنا ولا تُحفظ، ويُحفظ البريد فقط لربط سجلّك.
+                        {t.previewAuthNote}
                       </div>
                     </>
                   )}
@@ -1625,14 +2008,14 @@ export default function App() {
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        أهلاً،{' '}
+                        {t.hello}{' '}
                         <span style={{ color: 'var(--acc)' }} dir="auto">
                           {linkedDisplayName}
                         </span>
                       </div>
                     )}
                     <div className="sub" style={{ overflowWrap: 'anywhere' }}>
-                      الحساب
+                      {t.accountLabel}
                       {isLinked ? (
                         <>
                           :{' '}
@@ -1647,15 +2030,34 @@ export default function App() {
                   </div>
                 </div>
                 <div className="sub" style={{ marginTop: '10px' }}>
-                  {history.length} ملف —{' '}
                   {isLinked
-                    ? 'سجلّك محفوظ على جهازك وعلى حسابك.'
-                    : 'بياناتك محفوظة على جهازك فقط.'}
+                    ? t.deviceAndAccountSaved(history.length)
+                    : t.deviceOnlySaved(history.length)}
                 </div>
               </div>
 
               <div className="card">
-                <b>الإعدادات</b>
+                <b>{t.settingsTitle}</b>
+
+                {/* Language Row */}
+                <button className="srow ghost" onClick={() => setHSub('lang')}>
+                  <span className="l">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="2" y1="12" x2="22" y2="12" />
+                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                    </svg>
+                    <span>{t.subTitles.lang}</span>
+                  </span>
+                  <span className="v">
+                    {lang === 'ar' ? 'العربية' : 'English'}
+                    <span style={{ display: 'inline-flex', transform: rowChevronTransform }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                    </span>
+                  </span>
+                </button>
 
                 {/* Font Row */}
                 <button
@@ -1672,11 +2074,11 @@ export default function App() {
                       <line x1="9" y1="20" x2="15" y2="20" />
                       <line x1="12" y1="4" x2="12" y2="20" />
                     </svg>
-                    <span>الخط</span>
+                    <span>{t.subTitles.font}</span>
                   </span>
                   <span className="v">
-                    {fontFamily || 'الافتراضي'}
-                    <span style={{ display: 'inline-flex', transform: 'rotate(90deg)' }}>
+                    {fontFamily || t.defaultLabel}
+                    <span style={{ display: 'inline-flex', transform: rowChevronTransform }}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M6 9l6 6 6-6" />
                       </svg>
@@ -1694,11 +2096,11 @@ export default function App() {
                       <circle cx="6.5" cy="12.5" r="1" />
                       <path d="M12 2a10 10 0 100 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.3-.5-.8-.5-1.3 0-1.1.9-2 2-2H18a4 4 0 004-4c0-5-4.5-9-10-9z" />
                     </svg>
-                    <span>المظهر</span>
+                    <span>{t.subTitles.theme}</span>
                   </span>
                   <span className="v">
-                    {TH_L[theme]}
-                    <span style={{ display: 'inline-flex', transform: 'rotate(90deg)' }}>
+                    {TH_LABELS[lang][theme]}
+                    <span style={{ display: 'inline-flex', transform: rowChevronTransform }}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M6 9l6 6 6-6" />
                       </svg>
@@ -1712,11 +2114,30 @@ export default function App() {
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
                     </svg>
-                    <span>التحميل</span>
+                    <span>{t.subTitles.dl}</span>
                   </span>
                   <span className="v">
-                    {defMode === 'audio' ? 'صوت فقط' : 'فيديو'}
-                    <span style={{ display: 'inline-flex', transform: 'rotate(90deg)' }}>
+                    {defMode === 'audio' ? t.audioTab : t.videoTab}
+                    <span style={{ display: 'inline-flex', transform: rowChevronTransform }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                    </span>
+                  </span>
+                </button>
+
+                {/* Notifications Row */}
+                <button className="srow ghost" onClick={() => setHSub('notif')}>
+                  <span className="l">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+                      <path d="M13.7 21a2 2 0 01-3.4 0" />
+                    </svg>
+                    <span>{t.notificationsTitle}</span>
+                  </span>
+                  <span className="v">
+                    {motOn ? <span style={{ color: 'var(--ok)' }}>{t.notifOnBadge}</span> : ''}
+                    <span style={{ display: 'inline-flex', transform: rowChevronTransform }}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M6 9l6 6 6-6" />
                       </svg>
@@ -1731,11 +2152,11 @@ export default function App() {
                       <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
                       <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
                     </svg>
-                    <span>ربط</span>
+                    <span>{t.subTitles.link}</span>
                   </span>
                   <span className="v">
-                    {isLinked ? <span style={{ color: 'var(--ok)' }}>مرتبط</span> : ''}
-                    <span style={{ display: 'inline-flex', transform: 'rotate(90deg)' }}>
+                    {isLinked ? <span style={{ color: 'var(--ok)' }}>{t.linked}</span> : ''}
+                    <span style={{ display: 'inline-flex', transform: rowChevronTransform }}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M6 9l6 6 6-6" />
                       </svg>
@@ -1744,6 +2165,17 @@ export default function App() {
                 </button>
 
                 <div style={{ marginTop: '14px' }}>
+                  <button
+                    type="button"
+                    className="ghost"
+                    style={{ width: '100%' }}
+                    onClick={() => setTourStep(0)}
+                  >
+                    {t.replayTour}
+                  </button>
+                </div>
+
+                <div style={{ marginTop: '10px' }}>
                   <button
                     className="ghost danger"
                     id="wipe"
@@ -1755,32 +2187,69 @@ export default function App() {
                       } else {
                         setWipeArm(false);
                         setHistory([]);
-                        triggerToast('السجل', 'تم مسح سجل التحميلات بالكامل');
+                        triggerToast(t.historyLabel, t.historyCleared);
                       }
                     }}
                   >
-                    {wipeArm ? 'اضغط مرة أخرى للتأكيد' : 'مسح سجل التحميلات'}
+                    {wipeArm ? t.confirmClearHistory : t.clearHistory}
+                  </button>
+                </div>
+
+                <div style={{ marginTop: '10px' }}>
+                  <button
+                    type="button"
+                    className="ghost danger"
+                    style={{ width: '100%' }}
+                    onClick={() => {
+                      if (!wipeAllArm) {
+                        setWipeAllArm(true);
+                        setTimeout(() => setWipeAllArm(false), 3000);
+                      } else {
+                        setWipeAllArm(false);
+                        try {
+                          [
+                            'tanzeelati-theme',
+                            'font-v1',
+                            'link-v1',
+                            'tanzeelati-commit-sha',
+                            'tanzeelati-lang',
+                            'lang-v1',
+                            'mot-on',
+                            'mot-min',
+                            'dev-notif',
+                          ].forEach((k) => localStorage.removeItem(k));
+                        } catch {}
+                        setHistory([]);
+                        triggerToast(t.erasedToastTitle, t.erasedToastBody);
+                        setTimeout(() => window.location.reload(), 800);
+                      }
+                    }}
+                  >
+                    {wipeAllArm ? t.confirmClearHistory : t.eraseAllData}
                   </button>
                 </div>
               </div>
 
-              {/* App Update Card (matching إنجازاتي style) */}
               <div className="card">
-                <b>تحديث التطبيق</b>
-                <button
-                  type="button"
-                  className="srow ghost"
-                  onClick={() => checkForUpdates(true)}
-                >
-                  <span className="l">
+                <b>{t.aboutTitle}</b>
+                <div className="sub" style={{ marginTop: '8px' }}>
+                  {t.aboutDesc}
+                </div>
+                <div className="about-foot">
+                  <span className="sub">{t.versionLabel(APP_VERSION)}</span>
+                  <button
+                    type="button"
+                    className="upd-btn"
+                    onClick={() => checkForUpdates(true)}
+                  >
                     <svg
                       className={updateStatus === 'checking' ? 'upd-spin' : ''}
-                      width="20"
-                      height="20"
+                      width="15"
+                      height="15"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
-                      strokeWidth="2"
+                      strokeWidth="2.2"
                       strokeLinecap="round"
                       strokeLinejoin="round"
                     >
@@ -1789,37 +2258,16 @@ export default function App() {
                       <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
                       <path d="M16 16h5v5" />
                     </svg>
-                    <span>التحقق من التحديثات</span>
-                  </span>
-                  <span className="v">
-                    {updateStatus === 'available' ? (
-                      <span style={{ color: 'var(--acc)', fontWeight: 700 }}>تحديث متاح</span>
-                    ) : (
-                      <span>الإصدار {APP_VERSION}</span>
-                    )}
-                    <span style={{ display: 'inline-flex', transform: 'rotate(90deg)' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M6 9l6 6 6-6" />
-                      </svg>
-                    </span>
-                  </span>
-                </button>
-              </div>
-
-              <div className="card">
-                <b>عن التطبيق</b>
-                <div className="sub" style={{ marginTop: '8px' }}>
-                  تنزيلاتي — أداة بسيطة لتحميل الفيديوهات أو استخراج الصوت منها.
-                </div>
-                <div className="sub" style={{ marginTop: '4px' }}>
-                  الإصدار {APP_VERSION} · يدعم السحب بالتاتش ورصد الحافظة
+                    <span>{t.checkUpdatesBtn}</span>
+                    {updateStatus === 'available' && <span className="upd-btn-dot" aria-hidden="true"></span>}
+                  </button>
                 </div>
               </div>
             </>
           )}
         </div>
 
-        <p className="note">نسخة لعرض الشكل فقط، والتقدم فيها محاكاة.</p>
+        <p className="note">{t.previewNote}</p>
       </main>
 
       {/* Floating Bottom Dock (#dock) */}
@@ -1828,7 +2276,7 @@ export default function App() {
           <button
             id="tD"
             className={curTab === 'D' ? 'on' : ''}
-            aria-label="تحميل"
+            aria-label={t.navDownload}
             role="tab"
             aria-selected={curTab === 'D'}
             onClick={() => switchTab('D')}
@@ -1846,13 +2294,13 @@ export default function App() {
             >
               <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
             </svg>
-            <span className="tn">تحميل</span>
+            <span className="tn">{t.navDownload}</span>
           </button>
 
           <button
             id="tS"
             className={curTab === 'S' ? 'on' : ''}
-            aria-label="السجل"
+            aria-label={t.navHistory}
             role="tab"
             aria-selected={curTab === 'S'}
             onClick={() => switchTab('S')}
@@ -1871,17 +2319,17 @@ export default function App() {
               <path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8" />
               <path d="M3 3v5h5M12 7v5l3 2" />
             </svg>
-            <span className="tn">السجل</span>
+            <span className="tn">{t.navHistory}</span>
           </button>
         </div>
 
         <button
           id="tH"
           className={curTab === 'H' ? 'on' : ''}
-          aria-label="المزيد"
+          aria-label={t.navMore}
           onClick={() => switchTab('H')}
         >
-          {updateStatus === 'available' && <span className="tH-dot" aria-label="تحديث متاح"></span>}
+          {updateStatus === 'available' && <span className="tH-dot" aria-label={t.updateAvailableAria}></span>}
           <svg
             width="24"
             height="24"
@@ -1896,7 +2344,7 @@ export default function App() {
         </button>
       </div>
 
-      {/* --- Clipboard Link Caught Drawer / Sheet ("تبويب بالفيديو واحمله ازاي وبانهي جودة") --- */}
+      {/* --- Clipboard Link Caught Drawer / Sheet --- */}
       {caughtVideo && (
         <div
           className="sheet-backdrop"
@@ -1907,7 +2355,7 @@ export default function App() {
           <div
             className="sheet-container"
             onClick={(e) => e.stopPropagation()}
-            dir="rtl"
+            dir={lang === 'ar' ? 'rtl' : 'ltr'}
           >
             <div className="sheet-handle"></div>
 
@@ -1926,7 +2374,7 @@ export default function App() {
                   {caughtVideo.platform}
                 </span>
                 <b style={{ fontSize: '17px', color: 'var(--text)' }}>
-                  رابط مكتشف في الحافظة 📋
+                  {t.caughtTitle}
                 </b>
               </div>
               <button
@@ -1935,7 +2383,7 @@ export default function App() {
                 style={{ padding: '6px 10px', fontSize: '13px' }}
                 onClick={() => setCaughtVideo(null)}
               >
-                إغلاق
+                {t.close}
               </button>
             </div>
 
@@ -1970,10 +2418,10 @@ export default function App() {
               </div>
             </div>
 
-            {/* Selection: كيف أحمله؟ (فيديو أو صوت فقط) */}
+            {/* Selection: Video or Audio */}
             <div style={{ marginBottom: '12px' }}>
               <label className="t" style={{ fontSize: '14px', marginBottom: '6px' }}>
-                كيف ترغب في تحميله؟
+                {t.howToDownload}
               </label>
               <div className="mt" data-m={caughtMode} role="tablist">
                 <span className="pill"></span>
@@ -1985,7 +2433,7 @@ export default function App() {
                     setCaughtQuality(OPTIONS.video[0][0]);
                   }}
                 >
-                  فيديو كامل
+                  {t.fullVideo}
                 </button>
                 <button
                   className={caughtMode === 'audio' ? 'on' : ''}
@@ -1995,15 +2443,15 @@ export default function App() {
                     setCaughtQuality(OPTIONS.audio[0][0]);
                   }}
                 >
-                  استخراج صوت فقط
+                  {t.audioExtractOnly}
                 </button>
               </div>
             </div>
 
-            {/* Selection: بأي جودة؟ (Quality Picker Grid) */}
+            {/* Selection: Quality Picker Grid */}
             <div>
               <label className="t" style={{ fontSize: '14px', marginBottom: '6px' }}>
-                بأي جودة تريد الحفظ؟
+                {t.whichQuality}
               </label>
               <div className="q-grid">
                 {OPTIONS[caughtMode].map(([keyVal, label, desc, size]) => (
@@ -2042,7 +2490,7 @@ export default function App() {
                 >
                   <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
                 </svg>
-                <span>تحميل الآن بهذه الجودة مباشرة</span>
+                <span>{t.downloadNowQuality}</span>
               </button>
 
               <button
@@ -2051,27 +2499,28 @@ export default function App() {
                 style={{ width: '100%', padding: '10px' }}
                 onClick={handleOpenCaughtInApp}
               >
-                فتح ومراجعة في صفحة التحميل
+                {t.openInDownloadTab}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* --- Professional App Update Dialog Modal (matching إنجازاتي) --- */}
+      {/* --- App Update Bottom Sheet (bilingual ar/en + exact match to إنجازاتي) --- */}
       {updateDialogOpen && (
         <div
-          className="dlg-backdrop"
+          className="sheet-backdrop"
+          style={{ zIndex: 200 }}
           onClick={() => {
             if (updateStatus !== 'updating') setUpdateDialogOpen(false);
           }}
           role="dialog"
           aria-modal="true"
         >
-          <div className="dlg-card" onClick={(e) => e.stopPropagation()} dir="rtl">
+          <div className="upd-sheet" onClick={(e) => e.stopPropagation()} dir={lang === 'ar' ? 'rtl' : 'ltr'}>
             {updateStatus === 'checking' && (
               <>
-                <div className="dlg-badge" aria-hidden="true">
+                <div className="upd-glow" aria-hidden="true">
                   <svg
                     className="upd-spin"
                     width="26"
@@ -2089,38 +2538,42 @@ export default function App() {
                     <path d="M16 16h5v5" />
                   </svg>
                 </div>
-                <h3 className="dlg-title">جارٍ التحقق من التحديثات</h3>
-                <p className="dlg-desc" style={{ marginBottom: 0 }}>
-                  يتم الآن الاتصال بـ GitHub لفحص آخر إصدار متوفر من تطبيق تنزيلاتي...
-                </p>
+                <div className="upd-pill">{t.updateCheckingPill}</div>
+                <h3>{t.updateCheckingTitle}</h3>
+                <p style={{ marginBottom: 0 }}>{t.updateCheckingDesc}</p>
               </>
             )}
 
             {updateStatus === 'latest' && (
               <>
-                <div className="dlg-badge ok" aria-hidden="true">
+                <div className="upd-glow ok" aria-hidden="true">
                   <svg
-                    width="28"
-                    height="28"
+                    width="26"
+                    height="26"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
-                    strokeWidth="2.6"
+                    strokeWidth="2.8"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   >
-                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                    <path d="M22 4L12 14.01l-3-3" />
+                    <path d="M5 12l5 5 9-10" />
                   </svg>
                 </div>
-                <h3 className="dlg-title">أنت على أحدث إصدار</h3>
-                <span className="dlg-ver ok">الإصدار {APP_VERSION}</span>
-                <p className="dlg-desc">
-                  تطبيق تنزيلاتي محدّث بالكامل إلى آخر نسخة متوفرة، ولا توجد تحديثات جديدة في الوقت الحالي.
+                <div className="upd-pill ok">{t.updateLatestPill}</div>
+                <h3>{t.updateLatestTitle}</h3>
+                <p>
+                  {t.updateLatestDescBefore}
+                  <span style={{ color: 'var(--acc)', fontWeight: 700 }}>{APP_VERSION}</span>
+                  {t.updateLatestDescAfter}
                 </p>
-                <div className="dlg-actions">
-                  <button type="button" onClick={() => setUpdateDialogOpen(false)}>
-                    حسناً
+                <div className="upd-sheet-actions">
+                  <button
+                    type="button"
+                    className="go"
+                    onClick={() => setUpdateDialogOpen(false)}
+                  >
+                    {t.updateLatestBtn}
                   </button>
                 </div>
               </>
@@ -2128,30 +2581,32 @@ export default function App() {
 
             {updateStatus === 'available' && updateInfo && (
               <>
-                <div className="dlg-badge" aria-hidden="true">
+                <div className="upd-glow" aria-hidden="true">
                   <svg
                     width="26"
                     height="26"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
-                    strokeWidth="2.4"
+                    strokeWidth="2.5"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   >
                     <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
                   </svg>
                 </div>
-                <h3 className="dlg-title">يتوفر تحديث جديد</h3>
-                <span className="dlg-ver">الإصدار {updateInfo.version}</span>
-                <p className="dlg-desc" style={{ marginBottom: '12px' }}>
-                  {updateInfo.title}
+                <div className="upd-pill">{t.updateAvailPill}</div>
+                <h3>{t.updateAvailTitle}</h3>
+                <p style={{ marginBottom: '14px' }}>
+                  {t.updateAvailVersionPrefix}
+                  <span style={{ color: 'var(--acc)', fontWeight: 700 }}>{updateInfo.version}</span>
+                  ) — {activeUpdateTitle}
                 </p>
 
                 <div className="dlg-features">
-                  <div className="dlg-features-h">المزايا الجديدة في هذا التحديث:</div>
+                  <div className="dlg-features-h">{t.updateFeaturesHeading}</div>
                   <ul>
-                    {updateInfo.features.map((feat, idx) => (
+                    {activeUpdateFeatures.map((feat, idx) => (
                       <li key={idx}>
                         <svg
                           width="16"
@@ -2171,16 +2626,17 @@ export default function App() {
                   </ul>
                 </div>
 
-                <div className="dlg-actions">
-                  <button type="button" onClick={applyAppUpdate}>
-                    تحديث التطبيق الآن
+                <div className="upd-sheet-actions">
+                  <button type="button" className="go" onClick={applyAppUpdate}>
+                    {t.updateNowBtn}
                   </button>
                   <button
                     type="button"
                     className="ghost"
+                    style={{ width: '100%', padding: '11px' }}
                     onClick={() => setUpdateDialogOpen(false)}
                   >
-                    لاحقاً
+                    {t.laterBtn}
                   </button>
                 </div>
               </>
@@ -2188,7 +2644,7 @@ export default function App() {
 
             {updateStatus === 'updating' && (
               <>
-                <div className="dlg-badge" aria-hidden="true">
+                <div className="upd-glow" aria-hidden="true">
                   <svg
                     className="upd-spin"
                     width="26"
@@ -2206,20 +2662,18 @@ export default function App() {
                     <path d="M16 16h5v5" />
                   </svg>
                 </div>
-                <h3 className="dlg-title">جارٍ تحديث التطبيق</h3>
-                <span className="dlg-ver">{Math.floor(updateProgress)}%</span>
+                <div className="upd-pill">{t.updateUpdatingPill(Math.floor(updateProgress))}</div>
+                <h3>{t.updateUpdatingTitle}</h3>
                 <div className="bar" style={{ height: '12px', margin: '6px 0 14px' }}>
                   <div className="fill run" style={{ width: `${updateProgress}%` }}></div>
                 </div>
-                <p className="dlg-desc" style={{ marginBottom: 0 }}>
-                  يتم الآن تجهيز وتنزيل الإصدار الجديد من GitHub...
-                </p>
+                <p style={{ marginBottom: 0 }}>{t.updateUpdatingDesc}</p>
               </>
             )}
 
             {updateStatus === 'error' && (
               <>
-                <div className="dlg-badge err" aria-hidden="true">
+                <div className="upd-glow err" aria-hidden="true">
                   <svg
                     width="26"
                     height="26"
@@ -2235,20 +2689,20 @@ export default function App() {
                     <line x1="12" y1="16" x2="12.01" y2="16" />
                   </svg>
                 </div>
-                <h3 className="dlg-title">تعذر الاتصال بـ GitHub</h3>
-                <p className="dlg-desc">
-                  يرجى التأكد من اتصالك بالإنترنت ثم إعادة المحاولة للتحقق من وجود تحديثات جديدة.
-                </p>
-                <div className="dlg-actions">
-                  <button type="button" onClick={() => checkForUpdates(true)}>
-                    إعادة المحاولة
+                <div className="upd-pill err">{t.updateErrorPill}</div>
+                <h3>{t.updateErrorTitle}</h3>
+                <p>{t.updateErrorDesc}</p>
+                <div className="upd-sheet-actions">
+                  <button type="button" className="go" onClick={() => checkForUpdates(true)}>
+                    {t.retryBtn}
                   </button>
                   <button
                     type="button"
                     className="ghost"
+                    style={{ width: '100%', padding: '11px' }}
                     onClick={() => setUpdateDialogOpen(false)}
                   >
-                    إغلاق
+                    {t.close}
                   </button>
                 </div>
               </>
@@ -2257,22 +2711,64 @@ export default function App() {
         </div>
       )}
 
+      {/* --- Replayable Intro Tour Dialog --- */}
+      {tourStep >= 0 && (
+        <div className="dlg-backdrop" onClick={() => setTourStep(-1)} role="dialog" aria-modal="true">
+          <div className="dlg-card" onClick={(e) => e.stopPropagation()} dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+            <h3 className="dlg-title">{t.tourSteps[tourStep][0]}</h3>
+            <span className="dlg-ver">
+              {tourStep + 1} / {t.tourSteps.length}
+            </span>
+            <p className="dlg-desc">{t.tourSteps[tourStep][1]}</p>
+            <div className="dlg-actions">
+              <button
+                type="button"
+                onClick={() => (tourStep >= t.tourSteps.length - 1 ? setTourStep(-1) : setTourStep(tourStep + 1))}
+              >
+                {tourStep >= t.tourSteps.length - 1 ? t.tourStart : t.tourNext}
+              </button>
+              {tourStep < t.tourSteps.length - 1 && (
+                <button type="button" className="ghost" onClick={() => setTourStep(-1)}>
+                  {t.tourSkip}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Floating Toast Notification (.nbn) */}
       {toastMsg && (
         <div className="nbn">
           <div className="ni">
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M5 12l5 5 9-10" />
-            </svg>
+            {toastMsg.icon === 'bell' ? (
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              </svg>
+            ) : (
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M5 12l5 5 9-10" />
+              </svg>
+            )}
           </div>
           <div style={{ minWidth: 0 }}>
             <b>{toastMsg.title}</b>

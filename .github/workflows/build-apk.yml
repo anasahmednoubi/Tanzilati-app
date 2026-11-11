@@ -79,8 +79,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(node -e "console.log(require('./public/version.json').version)")
-          TITLE=$(node -e "console.log(require('./public/version.json').title)")
-          NOTES=$(node -e "console.log(require('./public/version.json').features.map(f => '- ' + f).join('\n'))")
+          TITLE=$(node -e "const v=require('./public/version.json'); console.log(v.title_ar || v.title)")
+          NOTES=$(node -e "const v=require('./public/version.json'); const ar=(v.features_ar||v.features||[]).map(f=>'- '+f).join('\n'); const en=(v.features_en||[]).map(f=>'- '+f).join('\n'); console.log('## العربية\n'+ar+(en?'\n\n## English\n'+en:''))")
           TAG="v${VERSION}"
           cp "${{ steps.find_apk.outputs.apk_path }}" Tanzeelati-Debug.apk
           if gh release view "$TAG" >/dev/null 2>&1; then

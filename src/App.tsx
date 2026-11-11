@@ -185,7 +185,7 @@ export default function App() {
     const root = document.documentElement;
     root.lang = lang;
     root.dir = lang === 'ar' ? 'rtl' : 'ltr';
-    document.title = lang === 'ar' ? 'تنزيلاتي' : 'Tanzeelati';
+    document.title = lang === 'ar' ? 'تنزيلاتي' : 'My Downloads';
     try {
       localStorage.setItem('tanzeelati-lang', lang);
     } catch {}
@@ -227,7 +227,6 @@ export default function App() {
   const [isFetching, setIsFetching] = useState(false);
   const [isRevealed, setIsRevealed] = useState(true);
   const [mode, setMode] = useState<'video' | 'audio'>('video');
-  const [defMode, setDefMode] = useState<'video' | 'audio'>('video');
   const [qv, setQv] = useState<string>(OPTIONS_I18N.ar.video[0][0]);
   const [ddOpen, setDdOpen] = useState(false);
   const [savePath, setSavePath] = useState('~/Downloads');
@@ -282,8 +281,8 @@ export default function App() {
     },
   ]);
 
-  // Settings Sub-Page: null (main settings) | 'font' | 'theme' | 'lang' | 'dl' | 'link' | 'notif'
-  const [hSub, setHSub] = useState<'font' | 'theme' | 'lang' | 'dl' | 'link' | 'notif' | null>(null);
+  // Settings Sub-Page: null (main settings) | 'font' | 'theme' | 'lang' | 'link' | 'notif'
+  const [hSub, setHSub] = useState<'font' | 'theme' | 'lang' | 'link' | 'notif' | null>(null);
   const [wipeArm, setWipeArm] = useState(false);
   const [wipeAllArm, setWipeAllArm] = useState(false);
   const [motOn, setMotOn] = useState<boolean>(() => {
@@ -1204,61 +1203,23 @@ export default function App() {
             </svg>
             <h1>{t.appName}</h1>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <button
-              id="langBtn"
-              type="button"
-              onClick={() => handleLanguageSwitch(lang === 'ar' ? 'en' : 'ar')}
-              aria-label={t.appLanguage}
-              title={t.appLanguage}
-              style={{
-                background: 'var(--card)',
-                color: 'var(--text)',
-                border: '1px solid var(--line)',
-                borderRadius: '999px',
-                height: '42px',
-                padding: '0 12px',
-                fontSize: '13px',
-                fontWeight: 700,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-              }}
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="2" y1="12" x2="22" y2="12" />
-                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+          <button
+            id="thm"
+            className={spinThm ? 'spin' : ''}
+            onClick={handleThemeToggle}
+            aria-label={t.toggleThemeAria}
+          >
+            {isDarkNow() ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
               </svg>
-              <span>{lang === 'ar' ? 'EN' : 'ع'}</span>
-            </button>
-            <button
-              id="thm"
-              className={spinThm ? 'spin' : ''}
-              onClick={handleThemeToggle}
-              aria-label={t.toggleThemeAria}
-            >
-              {isDarkNow() ? (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <circle cx="12" cy="12" r="4" />
-                  <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-                </svg>
-              ) : (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z" />
-                </svg>
-              )}
-            </button>
-          </div>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z" />
+              </svg>
+            )}
+          </button>
         </div>
 
         <p className="sub lead">{t.tagline}</p>
@@ -1719,44 +1680,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Sub-page: Download Mode */}
-              {hSub === 'dl' && (
-                <>
-                  <div className="card">
-                    <b>{t.defaultType}</b>
-                    <div className="chips" style={{ margin: '10px 0 0' }}>
-                      {(['video', 'audio'] as const).map((m) => (
-                        <button
-                          key={m}
-                          className={`chip ${defMode === m ? 'on' : ''}`}
-                          onClick={() => {
-                            setDefMode(m);
-                            handleModeChange(m);
-                          }}
-                        >
-                          {m === 'video' ? t.videoTab : t.audioTab}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="card">
-                    <b>{t.saveLocation}</b>
-                    <div className="dir" style={{ border: 0, paddingTop: '6px', marginTop: '6px' }}>
-                      <span>
-                        <code>{savePath}</code>
-                      </span>
-                      <button
-                        className="ghost"
-                        type="button"
-                        onClick={() => setIsChangingPath(!isChangingPath)}
-                      >
-                        {t.change}
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-
               {/* Sub-page: Notifications */}
               {hSub === 'notif' && (
                 <>
@@ -2039,27 +1962,7 @@ export default function App() {
               <div className="card">
                 <b>{t.settingsTitle}</b>
 
-                {/* Language Row */}
-                <button className="srow ghost" onClick={() => setHSub('lang')}>
-                  <span className="l">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="2" y1="12" x2="22" y2="12" />
-                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-                    </svg>
-                    <span>{t.subTitles.lang}</span>
-                  </span>
-                  <span className="v">
-                    {lang === 'ar' ? 'العربية' : 'English'}
-                    <span style={{ display: 'inline-flex', transform: rowChevronTransform }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M6 9l6 6 6-6" />
-                      </svg>
-                    </span>
-                  </span>
-                </button>
-
-                {/* Font Row */}
+                {/* 1. Font Row */}
                 <button
                   className="srow ghost"
                   onClick={() => {
@@ -2086,7 +1989,7 @@ export default function App() {
                   </span>
                 </button>
 
-                {/* Theme Row */}
+                {/* 2. Theme Row */}
                 <button className="srow ghost" onClick={() => setHSub('theme')}>
                   <span className="l">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2108,25 +2011,7 @@ export default function App() {
                   </span>
                 </button>
 
-                {/* Download Row */}
-                <button className="srow ghost" onClick={() => setHSub('dl')}>
-                  <span className="l">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
-                    </svg>
-                    <span>{t.subTitles.dl}</span>
-                  </span>
-                  <span className="v">
-                    {defMode === 'audio' ? t.audioTab : t.videoTab}
-                    <span style={{ display: 'inline-flex', transform: rowChevronTransform }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M6 9l6 6 6-6" />
-                      </svg>
-                    </span>
-                  </span>
-                </button>
-
-                {/* Notifications Row */}
+                {/* 3. Notifications Row */}
                 <button className="srow ghost" onClick={() => setHSub('notif')}>
                   <span className="l">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2145,7 +2030,7 @@ export default function App() {
                   </span>
                 </button>
 
-                {/* Link Row */}
+                {/* 4. Link Row */}
                 <button className="srow ghost" onClick={() => setHSub('link')}>
                   <span className="l">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2156,6 +2041,26 @@ export default function App() {
                   </span>
                   <span className="v">
                     {isLinked ? <span style={{ color: 'var(--ok)' }}>{t.linked}</span> : ''}
+                    <span style={{ display: 'inline-flex', transform: rowChevronTransform }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                    </span>
+                  </span>
+                </button>
+
+                {/* 5. Language Row */}
+                <button className="srow ghost" onClick={() => setHSub('lang')}>
+                  <span className="l">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="2" y1="12" x2="22" y2="12" />
+                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                    </svg>
+                    <span>{t.subTitles.lang}</span>
+                  </span>
+                  <span className="v">
+                    {lang === 'ar' ? 'العربية' : 'English'}
                     <span style={{ display: 'inline-flex', transform: rowChevronTransform }}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M6 9l6 6 6-6" />

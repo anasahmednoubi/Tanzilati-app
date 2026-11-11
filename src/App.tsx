@@ -803,18 +803,34 @@ export default function App() {
     triggerToast(t.newLinkToast, t.platformCaptured(initial.platform));
   };
 
-  // Load Google fonts dynamically
+  // Load Google fonts reliably (single font on boot, or batched group on picker open)
   const loadedFontsRef = useRef<Record<string, boolean>>({});
+  const loadedGroupsRef = useRef<Record<string, boolean>>({});
+
+  const fontQuerySpec = (fontName: string) =>
+    'family=' +
+    encodeURIComponent(fontName).replace(/%20/g, '+') +
+    (ONE.has(fontName) ? '' : ':wght@400;600;700');
+
   const loadFont = (fontName: string) => {
     if (!fontName || loadedFontsRef.current[fontName]) return;
     loadedFontsRef.current[fontName] = true;
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href =
-      'https://fonts.googleapis.com/css2?family=' +
-      fontName.replace(/ /g, '+') +
-      (ONE.has(fontName) ? '' : ':wght@400;700') +
-      '&display=swap';
+    link.href = `https://fonts.googleapis.com/css2?${fontQuerySpec(fontName)}&display=swap`;
+    document.head.appendChild(link);
+  };
+
+  const loadFontGroup = (groupKey: string, fonts: string[]) => {
+    if (loadedGroupsRef.current[groupKey]) return;
+    loadedGroupsRef.current[groupKey] = true;
+    fonts.forEach((f) => {
+      loadedFontsRef.current[f] = true;
+    });
+    const query = fonts.map(fontQuerySpec).join('&');
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = `https://fonts.googleapis.com/css2?${query}&display=swap`;
     document.head.appendChild(link);
   };
 
@@ -824,7 +840,7 @@ export default function App() {
       loadFont(fontFamily);
       document.documentElement.style.setProperty(
         '--ff',
-        `"${fontFamily}", system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`
+        `"${fontFamily}", "Cairo", system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`
       );
     } else {
       document.documentElement.style.removeProperty('--ff');
@@ -1839,11 +1855,11 @@ export default function App() {
                       setFOpen(!fOpen);
                       if (!fOpen) {
                         setSOpen(false);
-                        FG.forEach((g) => g[1].forEach(loadFont));
+                        FG.forEach((g) => loadFontGroup(g[0], g[1]));
                       }
                     }}
                   >
-                    <span style={fontFamily ? { fontFamily: `'${fontFamily}', sans-serif` } : {}}>
+                    <span style={fontFamily ? { fontFamily: `'${fontFamily}', "Cairo", sans-serif` } : {}}>
                       {fontFamily || t.defaultLabel}
                     </span>
                     <span style={{ display: 'inline-flex' }}>
@@ -1873,14 +1889,18 @@ export default function App() {
                             <button
                               key={fontName}
                               className={`fi ${fontFamily === fontName ? 'on' : ''}`}
-                              style={{ fontFamily: `'${fontName}', sans-serif` }}
+                              style={{ fontFamily: `'${fontName}', "Cairo", sans-serif` }}
                               onClick={() => {
                                 setFontFamily(fontName);
                                 setFOpen(false);
                               }}
                             >
                               <span>{fontName}</span>
-                              {gi === 0 && <span dir="rtl">أبجد هوز</span>}
+                              {gi === 0 ? (
+                                <span dir="rtl">أبجد هوز</span>
+                              ) : (
+                                <span dir="ltr">Aa Bb 123</span>
+                              )}
                             </button>
                           ))}
                         </React.Fragment>

@@ -264,7 +264,7 @@ export default function App() {
   // Video Fetch & Mode
   const [url, setUrl] = useState('');
   const [isFetching, setIsFetching] = useState(false);
-  const [isRevealed, setIsRevealed] = useState(true);
+  const [isRevealed, setIsRevealed] = useState(false);
   const [mode, setMode] = useState<'video' | 'audio'>('video');
   const [qv, setQv] = useState<string>(OPTIONS_I18N.ar.video[0][0]);
   const [ddOpen, setDdOpen] = useState(false);
@@ -878,6 +878,40 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // Share App & Copy Developer Email (matches Injazati More tab cards)
+  const handleShareApp = async () => {
+    const shareUrl =
+      typeof window !== 'undefined' && window.location.origin.startsWith('http')
+        ? window.location.origin
+        : `https://github.com/${GITHUB_REPO}`;
+    const shareTitle = t.appName;
+    const shareText = `${t.appName} — ${t.tagline}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: shareTitle, text: shareText, url: shareUrl });
+        triggerToast(t.shareSuccessToast, t.appName);
+        return;
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      triggerToast(t.shareSuccessToast, t.shareCopiedToast);
+    } catch {
+      triggerToast(t.shareSuccessToast, shareUrl);
+    }
+  };
+
+  const handleCopyDevEmail = async () => {
+    try {
+      await navigator.clipboard.writeText(t.feedbackEmail);
+      triggerToast(t.emailCopiedTitle, t.emailCopiedBody);
+    } catch {
+      triggerToast(t.emailCopiedTitle, t.feedbackEmail);
+    }
+  };
+
   // Document-level Swipe Navigation (RTL & LTR aware)
   const curTabRef = useRef(curTab);
   curTabRef.current = curTab;
@@ -1409,57 +1443,6 @@ export default function App() {
 
         <p className="sub lead">{t.tagline}</p>
 
-        {/* Quick Clipboard Detection Bar & Touch indicator */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-          <button
-            type="button"
-            className="clip-chip"
-            onClick={() => checkClipboard(false)}
-            title={t.checkClipboardTitle}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-            </svg>
-            <span>{t.checkClipboardBtn}</span>
-          </button>
-
-          <div className="flex items-center gap-1.5 text-xs text-[var(--mute)]">
-            <span style={{ fontSize: '12px' }}>{t.simulateCopy}</span>
-            <button
-              type="button"
-              className="chip"
-              style={{ padding: '3px 8px', fontSize: '11px' }}
-              onClick={() => simulateCopyLink('https://www.tiktok.com/@tiktok/video/7106594312292453675')}
-            >
-              {t.tiktok}
-            </button>
-            <button
-              type="button"
-              className="chip"
-              style={{ padding: '3px 8px', fontSize: '11px' }}
-              onClick={() => simulateCopyLink('https://www.youtube.com/watch?v=dQw4w9WgXcQ')}
-            >
-              {t.youtube}
-            </button>
-            <button
-              type="button"
-              className="chip"
-              style={{ padding: '3px 8px', fontSize: '11px' }}
-              onClick={() => simulateCopyLink('https://soundcloud.com/forss/flickermood')}
-            >
-              {t.audioSample}
-            </button>
-          </div>
-        </div>
-
-        {/* Touch Swipe Dots Navigation Indicator */}
-        <div className="swipe-dots" aria-label={t.swipeIndicatorAria}>
-          <div className={`swipe-dot ${curTab === 'D' ? 'on' : ''}`} onClick={() => switchTab('D')}></div>
-          <div className={`swipe-dot ${curTab === 'S' ? 'on' : ''}`} onClick={() => switchTab('S')}></div>
-          <div className={`swipe-dot ${curTab === 'H' ? 'on' : ''}`} onClick={() => switchTab('H')}></div>
-        </div>
-
         {/* Tab: Download (#pD) */}
         <div id="pD" className={`${curTab === 'D' ? '' : 'hide'} ${tabDirection}`}>
           <section className="card">
@@ -1467,19 +1450,80 @@ export default function App() {
               {t.videoUrlLabel}
             </label>
             <div className="row">
-              <input
-                type="text"
-                id="url"
-                placeholder="https://"
-                inputMode="url"
-                autoComplete="off"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleFetch()}
-              />
+              <div className="url-wrap">
+                <input
+                  type="text"
+                  id="url"
+                  placeholder="https://"
+                  inputMode="url"
+                  autoComplete="off"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleFetch()}
+                />
+                {url.trim().length > 0 && (
+                  <button
+                    type="button"
+                    className="url-clear"
+                    aria-label={t.clearUrlLabel}
+                    title={t.clearUrlLabel}
+                    onClick={() => {
+                      setUrl('');
+                      setCustomVideoMeta(null);
+                      setIsRevealed(false);
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
+                      <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
               <button id="fetch" disabled={isFetching} onClick={handleFetch}>
                 {isFetching ? t.fetching : t.fetch}
               </button>
+            </div>
+
+            <div className="url-helper">
+              <button
+                type="button"
+                className="url-clip-btn"
+                onClick={() => checkClipboard(false)}
+                title={t.checkClipboardTitle}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                </svg>
+                <span>{t.checkClipboardBtn}</span>
+              </button>
+
+              <div className="url-try-list">
+                <span>{t.simulateCopy}</span>
+                <button
+                  type="button"
+                  className="url-try-link"
+                  onClick={() => simulateCopyLink('https://www.tiktok.com/@tiktok/video/7106594312292453675')}
+                >
+                  {t.tiktok}
+                </button>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  className="url-try-link"
+                  onClick={() => simulateCopyLink('https://www.youtube.com/watch?v=dQw4w9WgXcQ')}
+                >
+                  {t.youtube}
+                </button>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  className="url-try-link"
+                  onClick={() => simulateCopyLink('https://soundcloud.com/forss/flickermood')}
+                >
+                  {t.audioSample}
+                </button>
+              </div>
             </div>
             <div className={`reveal ${isRevealed ? 'open' : ''}`} id="rv">
               <div>
@@ -1681,7 +1725,19 @@ export default function App() {
               history.map((h, i) => (
                 <div key={h.id} className={`q ${h.fresh && i === 0 ? 'new' : ''}`}>
                   <div className="n">
-                    <div className="ic">{h.a ? '♪' : '▶'}</div>
+                    <div className="ic" aria-hidden="true">
+                      {h.a ? (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M9 18V5l12-2v13" />
+                          <circle cx="6" cy="18" r="3" />
+                          <circle cx="18" cy="16" r="3" />
+                        </svg>
+                      ) : (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M8 5.5v13l10-6.5-10-6.5z" />
+                        </svg>
+                      )}
+                    </div>
                     <span>{lang === 'en' && h.enName ? h.enName : h.n}</span>
                   </div>
                   <span className="s">{t.completedBadge}</span>
@@ -2333,13 +2389,51 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Share App Card (matched to Injazati visual identity) */}
+              <div className="card share-card">
+                <div className="share-row">
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className="share-title">
+                      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="18" cy="5" r="3" />
+                        <circle cx="6" cy="12" r="3" />
+                        <circle cx="18" cy="19" r="3" />
+                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                      </svg>
+                      <span>{t.shareCardTitle}</span>
+                    </div>
+                    <div className="sub" style={{ marginTop: '4px', fontSize: '13px', lineHeight: 1.45 }}>
+                      {t.shareCardDesc}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="share-go"
+                    onClick={handleShareApp}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <circle cx="18" cy="5" r="3" />
+                      <circle cx="6" cy="12" r="3" />
+                      <circle cx="18" cy="19" r="3" />
+                      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                      <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                    </svg>
+                    <span>{t.shareBtn}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* About Card */}
               <div className="card">
                 <b>{t.aboutTitle}</b>
                 <div className="sub" style={{ marginTop: '8px' }}>
                   {t.aboutDesc}
                 </div>
                 <div className="about-foot">
-                  <span className="sub">{t.versionLabel(APP_VERSION)}</span>
+                  <span className="sub" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {t.versionLabel(APP_VERSION)}
+                  </span>
                   <button
                     type="button"
                     className="upd-btn"
@@ -2363,6 +2457,43 @@ export default function App() {
                     </svg>
                     <span>{t.checkUpdatesBtn}</span>
                     {updateStatus === 'available' && <span className="upd-btn-dot" aria-hidden="true"></span>}
+                  </button>
+                </div>
+              </div>
+
+              {/* Feedback & Suggestions Card (matched to Injazati visual identity) */}
+              <div className="card feedback-card">
+                <div className="fb-head">
+                  <div className="fb-ico" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="4" width="20" height="16" rx="3" />
+                      <path d="M22 7l-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+                    </svg>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="fb-title">{t.feedbackTitle}</div>
+                    <div className="fb-sub">{t.feedbackSubtitle}</div>
+                  </div>
+                </div>
+                <p className="fb-desc">{t.feedbackDesc}</p>
+                <a className="fb-mail" href={`mailto:${t.feedbackEmail}`}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="2" y="4" width="20" height="16" rx="3" />
+                    <path d="M22 7l-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+                  </svg>
+                  <span>{t.feedbackEmail}</span>
+                </a>
+                <div className="fb-copy-row">
+                  <button
+                    type="button"
+                    className="ghost fb-copy-btn"
+                    onClick={handleCopyDevEmail}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                      <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                    </svg>
+                    <span>{t.copyEmailBtn}</span>
                   </button>
                 </div>
               </div>

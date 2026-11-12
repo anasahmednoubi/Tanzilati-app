@@ -1,27 +1,30 @@
 {
-  "version": "1.1.0",
-  "build": 2,
-  "date": "2026-11-11",
-  "title": "تحديث المزايا الذكية وفحص التحديثات",
-  "title_ar": "تحديث المزايا الذكية وفحص التحديثات",
-  "title_en": "Smart Features & GitHub Update Checker",
+  "version": "1.1.1",
+  "build": 3,
+  "date": "2026-11-12",
+  "title": "تحديث التحميل الفعلي وهوية إنجازاتي البصرية وتطوير الخطوط والأيقونة الداكنة",
+  "title_ar": "تحديث التحميل الفعلي وهوية إنجازاتي البصرية وتطوير الخطوط والأيقونة الداكنة",
+  "title_en": "Real Download Engine, Injazati UI Identity, Font Fixes & Dark Icon",
   "features": [
-    "إضافة مربع تحديث التطبيق من GitHub مباشرة داخل تبويب المزيد",
-    "دعم التنقل بالتاتش والسحب يميناً ويساراً بين التبويبات",
-    "الالتقاط التلقائي لروابط الفيديو من الحافظة مع خيارات الجودة",
-    "بناء ونشر ملف APK تلقائياً عبر GitHub Releases"
+    "التحميل الفعلي الكامل للفيديوهات والصوتيات من يوتيوب وتيك توك وX وإنستغرام وحفظها على الجهاز",
+    "تحديث واجهة المستخدم بالكامل لتطابق الهوية البصرية الأنيقة لتطبيق إنجازاتي",
+    "إصلاح وتحسين تحميل جميع الخطوط العربية واللاتينية بدقة فائقة ودعم أوزان 400 و600 و700",
+    "اعتماد أيقونة التطبيق الرسمية بالوضع الداكن (Dark Mode) الفخم للأندرويد والويب",
+    "إضافة بطاقات مشاركة التطبيق ومشاركة المقترحات ومسح الرابط السريع"
   ],
   "features_ar": [
-    "إضافة مربع تحديث التطبيق من GitHub مباشرة داخل تبويب المزيد",
-    "دعم التنقل بالتاتش والسحب يميناً ويساراً بين التبويبات",
-    "الالتقاط التلقائي لروابط الفيديو من الحافظة مع خيارات الجودة",
-    "بناء ونشر ملف APK تلقائياً عبر GitHub Releases"
+    "التحميل الفعلي الكامل للفيديوهات والصوتيات من يوتيوب وتيك توك وX وإنستغرام وحفظها على الجهاز",
+    "تحديث واجهة المستخدم بالكامل لتطابق الهوية البصرية الأنيقة لتطبيق إنجازاتي",
+    "إصلاح وتحسين تحميل جميع الخطوط العربية واللاتينية بدقة فائقة ودعم أوزان 400 و600 و700",
+    "اعتماد أيقونة التطبيق الرسمية بالوضع الداكن (Dark Mode) الفخم للأندرويد والويب",
+    "إضافة بطاقات مشاركة التطبيق ومشاركة المقترحات ومسح الرابط السريع"
   ],
   "features_en": [
-    "Added in-app GitHub update checker inside the More tab",
-    "Support touch swipe navigation left and right between tabs",
-    "Automatic clipboard video link detection with quality picker",
-    "Automated Android APK build & publishing via GitHub Releases"
+    "Real video and audio downloads from YouTube, TikTok, X, Instagram directly to device",
+    "Refined UI fully matching the clean visual identity of Injazati app",
+    "Fixed and optimized all Arabic and Latin font loading with 400, 600, 700 weights",
+    "Set the official app launcher icon to sleek Dark Mode for Android and Web",
+    "Added Share App, Feedback & Suggestions cards, and quick URL clear actions"
   ],
   "apkUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest/download/Tanzeelati-Debug.apk",
   "releaseUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest"

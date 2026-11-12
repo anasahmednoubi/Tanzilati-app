@@ -105,8 +105,8 @@ interface HistoryEntry {
   fresh?: boolean;
 }
 
-const APP_VERSION = '1.1.0';
-const APP_BUILD = 2;
+const APP_VERSION = '1.1.1';
+const APP_BUILD = 3;
 const GITHUB_REPO = 'anasahmednoubi/Tanzilati-app';
 
 const compareSemver = (a: string, b: string): number => {

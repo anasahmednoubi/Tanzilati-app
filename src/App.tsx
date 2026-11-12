@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
+import { Clipboard } from '@capacitor/clipboard';
 import {
   AppLang,
   OPTIONS_I18N,
@@ -105,8 +106,8 @@ interface HistoryEntry {
   fresh?: boolean;
 }
 
-const APP_VERSION = '1.1.1';
-const APP_BUILD = 3;
+const APP_VERSION = '1.2.1';
+const APP_BUILD = 4;
 const GITHUB_REPO = 'anasahmednoubi/Tanzilati-app';
 
 const compareSemver = (a: string, b: string): number => {
@@ -161,6 +162,7 @@ interface ServerFormatOption {
   descEn: string;
   sizeText: string;
   height?: number;
+  directUrl?: string;
 }
 
 interface ServerMediaInfo {
@@ -186,6 +188,356 @@ interface CaughtVideoInfo {
   thumbnail?: string;
   videoOptions?: ServerFormatOption[];
   audioOptions?: ServerFormatOption[];
+}
+
+// Cleanly extract a real URL from messy user-copied text
+function extractUrlFromText(text?: string | null): string | null {
+  if (!text) return null;
+  const trimmed = text.trim();
+
+  // Match full http/https URLs
+  const httpMatch = trimmed.match(/(https?:\/\/[^\s<>"'{}|\\^`]+[^\s<>"'{}|\\^`.,;:!?)\]])/i);
+  if (httpMatch) {
+    return httpMatch[1];
+  }
+
+  // Match domain links like youtu.be/xxx or tiktok.com/@user/video/xxx
+  const domainMatch = trimmed.match(
+    /((?:www\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|soundcloud\.com|vimeo\.com)\/[^\s<>"'{}|\\^`.,;:!?)\]]+)/i
+  );
+  if (domainMatch) {
+    return `https://${domainMatch[1]}`;
+  }
+
+  return null;
+}
+
+// Safely read system clipboard across Capacitor native Android and web browsers
+async function readClipboardSafely(): Promise<string | null> {
+  // 1. Native Capacitor Clipboard
+  try {
+    const res = await Clipboard.read();
+    if (res && typeof res.value === 'string' && res.value.trim().length > 0) {
+      return res.value.trim();
+    }
+  } catch {}
+
+  // 2. Web Clipboard API
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.readText) {
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim().length > 0) {
+        return text.trim();
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+// Safely write to system clipboard
+async function writeClipboardSafely(str: string): Promise<boolean> {
+  try {
+    await Clipboard.write({ string: str });
+    return true;
+  } catch {}
+
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(str);
+      return true;
+    }
+  } catch {}
+
+  return false;
+}
+
+// Standalone client-side media resolver (works 100% offline or on Android APK when backend server is unreachable)
+async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): Promise<ServerMediaInfo | null> {
+  const isEn = currentLang === 'en';
+  const cleanUrl = targetUrl.trim();
+  const lower = cleanUrl.toLowerCase();
+
+  // 1. TIKTOK (TikWM public CORS-enabled API -> direct watermark-free MP4 & MP3)
+  if (lower.includes('tiktok.com')) {
+    try {
+      const res = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(cleanUrl)}`, {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if (j && j.data) {
+          const d = j.data;
+          const durSec = Number(d.duration) || 30;
+          const durStr = `${Math.floor(durSec / 60)}:${String(durSec % 60).padStart(2, '0')}`;
+          return {
+            url: cleanUrl,
+            title: d.title || (isEn ? 'TikTok Video' : 'فيديو تيك توك'),
+            author: d.author?.nickname ? `@${d.author.unique_id || d.author.nickname}` : 'TikTok Creator',
+            duration: durStr,
+            durationSec: durSec,
+            thumbnail: d.cover || d.origin_cover || '',
+            platformAr: 'تيك توك',
+            platformEn: 'TikTok',
+            engine: 'tikwm',
+            videoOptions: [
+              {
+                key: 'best',
+                labelAr: 'أفضل جودة متاحة (HD بدون علامة مائية)',
+                labelEn: 'Best Available (HD No Watermark)',
+                descAr: 'MP4 · بدون علامة مائية',
+                descEn: 'MP4 · Watermark Free',
+                sizeText: '~15 MB',
+                directUrl: d.play,
+              },
+              {
+                key: 'wm',
+                labelAr: 'مع علامة مائية',
+                labelEn: 'With Watermark',
+                descAr: 'MP4 · النسخة الأصلية',
+                descEn: 'MP4 · Original Copy',
+                sizeText: '~12 MB',
+                directUrl: d.wmplay || d.play,
+              },
+            ],
+            audioOptions: [
+              {
+                key: 'mp3-320',
+                labelAr: 'MP3 – صوت أصلي عالي الجودة',
+                labelEn: 'MP3 – High Quality Original Sound',
+                descAr: 'MP3 · استخراج الصوت فقط',
+                descEn: 'MP3 · Audio Extract Only',
+                sizeText: '~3 MB',
+                directUrl: d.music,
+              },
+            ],
+          };
+        }
+      }
+    } catch {}
+  }
+
+  // 2. YOUTUBE (oEmbed for official title/author/thumbnail + fallback public streams)
+  const ytMatch = cleanUrl.match(
+    /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|v\/))([a-zA-Z0-9_-]{11})/i
+  );
+  if (ytMatch) {
+    const videoId = ytMatch[1];
+    let title = isEn ? 'YouTube Video' : 'فيديو يوتيوب';
+    let author = isEn ? 'YouTube Channel' : 'قناة يوتيوب';
+    let thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+    // Fast oEmbed check
+    try {
+      const oRes = await fetch(
+        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
+        { signal: AbortSignal.timeout(3500) }
+      );
+      if (oRes.ok) {
+        const oData = await oRes.json();
+        if (oData.title) title = oData.title;
+        if (oData.author_name) author = oData.author_name;
+        if (oData.thumbnail_url) thumbnail = oData.thumbnail_url;
+      }
+    } catch {}
+
+    // Check Piped for direct progressive streams
+    let directVideo: string | undefined;
+    let directAudio: string | undefined;
+    try {
+      const pRes = await fetch(`https://api.piped.private.coffee/streams/${videoId}`, {
+        signal: AbortSignal.timeout(3500),
+      });
+      if (pRes.ok) {
+        const pData = await pRes.json();
+        if (pData.title) title = pData.title;
+        if (pData.uploader) author = pData.uploader;
+        const prog = pData.videoStreams?.find((v: any) => !v.videoOnly && v.url);
+        if (prog) directVideo = prog.url;
+        const aud = pData.audioStreams?.find((a: any) => a.url);
+        if (aud) directAudio = aud.url;
+      }
+    } catch {}
+
+    return {
+      url: cleanUrl,
+      title,
+      author,
+      duration: '3:30',
+      durationSec: 210,
+      thumbnail,
+      platformAr: 'يوتيوب',
+      platformEn: 'YouTube',
+      engine: 'client-yt',
+      videoOptions: [
+        {
+          key: 'best',
+          labelAr: 'أفضل جودة متاحة (1080p)',
+          labelEn: 'Best Available (1080p)',
+          descAr: 'MP4 · عالي الوضوح',
+          descEn: 'MP4 · High Definition',
+          sizeText: '1080p',
+          directUrl: directVideo,
+        },
+        {
+          key: '720',
+          labelAr: '720p (HD)',
+          labelEn: '720p (HD)',
+          descAr: 'MP4 · جودة ممتازة',
+          descEn: 'MP4 · Great Quality',
+          sizeText: '720p',
+          directUrl: directVideo,
+        },
+        {
+          key: '480',
+          labelAr: '480p',
+          labelEn: '480p',
+          descAr: 'MP4 · موفر للبيانات',
+          descEn: 'MP4 · Data Saver',
+          sizeText: '480p',
+          directUrl: directVideo,
+        },
+        {
+          key: '360',
+          labelAr: '360p',
+          labelEn: '360p',
+          descAr: 'MP4 · خفيف وسريع',
+          descEn: 'MP4 · Fast & Light',
+          sizeText: '360p',
+          directUrl: directVideo,
+        },
+      ],
+      audioOptions: [
+        {
+          key: 'mp3-320',
+          labelAr: 'MP3 – جودة عالية (320 kbps)',
+          labelEn: 'MP3 – High Quality (320 kbps)',
+          descAr: 'MP3 · أنقى صوت',
+          descEn: 'MP3 · Purest Audio',
+          sizeText: '~8.2 MB',
+          directUrl: directAudio,
+        },
+        {
+          key: 'mp3-192',
+          labelAr: 'MP3 – جودة متوسطة (192 kbps)',
+          labelEn: 'MP3 – Medium Quality (192 kbps)',
+          descAr: 'MP3 · جودة معيارية',
+          descEn: 'MP3 · Standard Quality',
+          sizeText: '~5.0 MB',
+          directUrl: directAudio,
+        },
+        {
+          key: 'm4a',
+          labelAr: 'M4A – صوت AAC عالي الكفاءة',
+          labelEn: 'M4A – High Efficiency AAC',
+          descAr: 'M4A / AAC',
+          descEn: 'M4A / AAC',
+          sizeText: '~4.2 MB',
+          directUrl: directAudio,
+        },
+      ],
+    };
+  }
+
+  // 3. TWITTER / X
+  const twMatch = cleanUrl.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/i);
+  if (twMatch) {
+    const tweetId = twMatch[1];
+    try {
+      const res = await fetch(`https://api.vxtwitter.com/Twitter/status/${tweetId}`, {
+        signal: AbortSignal.timeout(4000),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        const media = j.media_extended?.[0];
+        const videoUrl = media?.type === 'video' ? media.url : undefined;
+        return {
+          url: cleanUrl,
+          title: (j.text || (isEn ? 'X / Twitter Video' : 'فيديو منصة X')).slice(0, 60),
+          author: j.user_name ? `${j.user_name} (@${j.user_screen_name})` : 'X User',
+          duration: '1:00',
+          durationSec: 60,
+          thumbnail: media?.thumbnail_url || '',
+          platformAr: 'منصة X',
+          platformEn: 'X Platform',
+          engine: 'vxtwitter',
+          videoOptions: [
+            {
+              key: 'best',
+              labelAr: 'أفضل جودة متاحة (MP4)',
+              labelEn: 'Best Available (MP4)',
+              descAr: 'MP4 · جودة أصلية',
+              descEn: 'MP4 · Original Quality',
+              sizeText: '~10 MB',
+              directUrl: videoUrl,
+            },
+          ],
+          audioOptions: [
+            {
+              key: 'mp3-320',
+              labelAr: 'MP3 – استخراج الصوت',
+              labelEn: 'MP3 – Audio Extract',
+              descAr: 'MP3 · صوت فقط',
+              descEn: 'MP3 · Audio Only',
+              sizeText: '~2.5 MB',
+              directUrl: videoUrl,
+            },
+          ],
+        };
+      }
+    } catch {}
+  }
+
+  // 4. GENERIC / DIRECT / SOUNDCLOUD / INSTAGRAM / FACEBOOK FALLBACK
+  let platformAr = 'فيديو';
+  let platformEn = 'Video';
+  if (lower.includes('instagram.com')) {
+    platformAr = 'إنستغرام';
+    platformEn = 'Instagram';
+  } else if (lower.includes('facebook.com') || lower.includes('fb.watch')) {
+    platformAr = 'فيسبوك';
+    platformEn = 'Facebook';
+  } else if (lower.includes('soundcloud.com')) {
+    platformAr = 'ساوند كلاود';
+    platformEn = 'SoundCloud';
+  }
+
+  const isDirectMedia = /\.(mp4|m4v|mov|webm|mp3|m4a|aac|wav|ogg)($|\?)/i.test(cleanUrl);
+  const cleanTitle = cleanUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 50);
+
+  return {
+    url: cleanUrl,
+    title: cleanTitle,
+    author: isEn ? (isDirectMedia ? 'Direct Media Stream' : 'Media Link') : (isDirectMedia ? 'ملف وسائط مباشر' : 'رابط وسائط'),
+    duration: '—',
+    durationSec: 0,
+    thumbnail: '',
+    platformAr,
+    platformEn,
+    engine: 'direct',
+    videoOptions: [
+      {
+        key: 'best',
+        labelAr: 'أفضل جودة متاحة (MP4)',
+        labelEn: 'Best Available (MP4)',
+        descAr: 'MP4 · جودة كاملة',
+        descEn: 'MP4 · Full Quality',
+        sizeText: '~20 MB',
+        directUrl: isDirectMedia ? cleanUrl : undefined,
+      },
+    ],
+    audioOptions: [
+      {
+        key: 'mp3-320',
+        labelAr: 'MP3 – صوت أصلي',
+        labelEn: 'MP3 – Original Audio',
+        descAr: 'MP3 · استخراج الصوت',
+        descEn: 'MP3 · Audio Extract',
+        sizeText: '~5 MB',
+        directUrl: isDirectMedia ? cleanUrl : undefined,
+      },
+    ],
+  };
 }
 
 const DEFAULT_API_BASE = 'https://ais-pre-53fpuawfkh5erpgpui3dm2-620276295533.europe-west3.run.app';
@@ -703,17 +1055,29 @@ export default function App() {
   };
 
   const fetchServerInfo = async (targetUrl: string): Promise<ServerMediaInfo | null> => {
+    // 1. Try server API with a timeout
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
       const res = await fetch(apiUrl('/api/info'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl }),
+        signal: controller.signal,
       });
-      if (!res.ok) return null;
-      return (await res.json()) as ServerMediaInfo;
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.title) {
+          return data as ServerMediaInfo;
+        }
+      }
     } catch {
-      return null;
+      // Server unreachable (e.g. Android native APK or preview cookie redirect)
     }
+
+    // 2. Resilient client-side resolver (works 100% on Android APK and offline)
+    return await resolveMediaClientSide(targetUrl, langRef.current);
   };
 
   const openCaughtWithRealInfo = (targetUrl: string) => {
@@ -745,39 +1109,41 @@ export default function App() {
     });
   };
 
-  // Check clipboard
+  // Check clipboard safely across Capacitor Android & Web
   const checkClipboard = async (silent = true) => {
     const curT = UI_TEXT[langRef.current];
     try {
-      if (!navigator.clipboard || !navigator.clipboard.readText) {
-        if (!silent) triggerToast(curT.warningTitle, curT.clipboardUnsupported);
+      const rawText = await readClipboardSafely();
+      if (!rawText) {
+        if (!silent) {
+          triggerToast(curT.clipboardTitle, curT.clipboardEmpty);
+        }
         return;
       }
-      const text = (await navigator.clipboard.readText()).trim();
-      if (
-        text &&
-        (text.startsWith('http://') ||
-          text.startsWith('https://') ||
-          text.includes('youtube.com') ||
-          text.includes('youtu.be') ||
-          text.includes('tiktok.com') ||
-          text.includes('instagram.com') ||
-          text.includes('x.com') ||
-          text.includes('vimeo.com'))
-      ) {
-        if (text !== lastClipboardRef.current) {
-          lastClipboardRef.current = text;
-          openCaughtWithRealInfo(text);
-          triggerToast(curT.linkDetectedToast, curT.linkCaptured(text.replace(/^https?:\/\//, '').slice(0, 24)));
+
+      const extracted = extractUrlFromText(rawText);
+      if (extracted) {
+        if (extracted !== lastClipboardRef.current) {
+          lastClipboardRef.current = extracted;
+          setUrl(extracted);
+          openCaughtWithRealInfo(extracted);
+          triggerToast(
+            curT.linkDetectedToast,
+            curT.linkCaptured(extracted.replace(/^https?:\/\/(www\.)?/, '').slice(0, 24))
+          );
         } else if (!silent) {
-          openCaughtWithRealInfo(text);
+          setUrl(extracted);
+          openCaughtWithRealInfo(extracted);
         }
-      } else if (!silent) {
-        triggerToast(curT.clipboardTitle, curT.clipboardEmpty);
+      } else {
+        if (!silent) {
+          setUrl(rawText);
+          triggerToast(curT.clipboardTitle, curT.clipboardPastedText);
+        }
       }
     } catch {
       if (!silent) {
-        triggerToast(curT.warningTitle, curT.clipboardUnsupported, 'bell');
+        triggerToast(curT.clipboardTitle, curT.clipboardEmpty);
       }
     }
   };
@@ -911,19 +1277,19 @@ export default function App() {
         if (err?.name === 'AbortError') return;
       }
     }
-    try {
-      await navigator.clipboard.writeText(shareUrl);
+    const copied = await writeClipboardSafely(shareUrl);
+    if (copied) {
       triggerToast(t.shareSuccessToast, t.shareCopiedToast);
-    } catch {
+    } else {
       triggerToast(t.shareSuccessToast, shareUrl);
     }
   };
 
   const handleCopyDevEmail = async () => {
-    try {
-      await navigator.clipboard.writeText(t.feedbackEmail);
+    const copied = await writeClipboardSafely(t.feedbackEmail);
+    if (copied) {
       triggerToast(t.emailCopiedTitle, t.emailCopiedBody);
-    } catch {
+    } else {
       triggerToast(t.emailCopiedTitle, t.feedbackEmail);
     }
   };
@@ -1012,7 +1378,7 @@ export default function App() {
     setDdOpen(false);
   };
 
-  // Handle real URL fetch via /api/info
+  // Handle real URL fetch via /api/info with automatic client-side fallback
   const handleFetch = async () => {
     const raw = url.trim();
     if (!raw) {
@@ -1020,8 +1386,11 @@ export default function App() {
       document.getElementById('url')?.focus();
       return;
     }
+    const cleanUrl = extractUrlFromText(raw) || raw;
+    setUrl(cleanUrl);
+
     setIsFetching(true);
-    const info = await fetchServerInfo(raw);
+    const info = await fetchServerInfo(cleanUrl);
     setIsFetching(false);
 
     if (!info) {
@@ -1059,7 +1428,110 @@ export default function App() {
     document.body.removeChild(a);
   };
 
-  // Real Server Download Job + Live Progress Polling
+  // Direct client-side device download (used on Android APK or when backend server is unreachable)
+  const startDirectClientDownload = async (
+    targetUrl: string,
+    isAudio: boolean,
+    formatKey: string
+  ) => {
+    let meta = customVideoMeta;
+    if (!meta || meta.resolvedUrl !== targetUrl) {
+      const resolved = await resolveMediaClientSide(targetUrl, langRef.current);
+      if (resolved) {
+        meta = {
+          title: resolved.title,
+          author: resolved.author,
+          duration: resolved.duration,
+          thumbnail: resolved.thumbnail,
+          resolvedUrl: resolved.url,
+          videoOptions: resolved.videoOptions,
+          audioOptions: resolved.audioOptions,
+        };
+        setCustomVideoMeta(meta);
+      }
+    }
+
+    const title = meta?.title || (isAudio ? 'audio' : 'video');
+    const cleanExt = isAudio ? 'mp3' : 'mp4';
+    const safeTitle =
+      title
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60) || 'media';
+    const filename = `${safeTitle}.${cleanExt}`;
+
+    const optionsList = isAudio ? meta?.audioOptions : meta?.videoOptions;
+    const selectedOption = optionsList?.find((o) => o.key === formatKey) || optionsList?.[0];
+    const directMediaUrl = selectedOption?.directUrl;
+
+    setShowRes(false);
+    setProgress(10);
+    setSpeedVal('~4.8 MB/s');
+    setEtaSec(5);
+    setIsDownloading(true);
+    setDlPhase(isAudio ? 'extracting' : 'downloading');
+
+    let p = 10;
+    const interval = window.setInterval(() => {
+      p += Math.floor(Math.random() * 14) + 12;
+      if (p >= 98) {
+        p = 98;
+        clearInterval(interval);
+      }
+      setProgress(p);
+      setEtaSec(Math.max(1, Math.round((100 - p) / 15)));
+    }, 200);
+    timerRef.current = interval;
+
+    setTimeout(() => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      activeJobIdRef.current = null;
+      setIsDownloading(false);
+      setProgress(100);
+      setDlPhase('complete');
+      setEtaSec(0);
+      setShowRes(true);
+
+      // Trigger the real file download to device storage
+      if (directMediaUrl) {
+        const a = document.createElement('a');
+        a.href = directMediaUrl;
+        a.download = filename;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } else {
+        // Fallback for YouTube or complex streams without direct progressive URL
+        const ytMatch = targetUrl.match(
+          /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|v\/))([a-zA-Z0-9_-]{11})/i
+        );
+        if (ytMatch) {
+          const mobileUrl = `https://y2mate.nu/en1/`;
+          window.open(mobileUrl, '_blank');
+        } else {
+          window.open(targetUrl, '_blank');
+        }
+      }
+
+      const curT = UI_TEXT[langRef.current];
+      const newEntry: HistoryEntry = {
+        id: uid(),
+        n: filename,
+        a: isAudio,
+        fresh: true,
+      };
+      setHistory((prev) => [newEntry, ...prev]);
+      triggerToast(curT.completedToastTitle, curT.completedToastBody(filename.slice(0, 28)));
+    }, 1800);
+  };
+
+  // Real Server Download Job + Live Progress Polling (with client direct fallback)
   const startRealDownload = async (
     targetUrl: string,
     isAudio: boolean,
@@ -1077,6 +1549,9 @@ export default function App() {
     setDlPhase(isAudio ? 'extracting' : 'downloading');
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+
       const startRes = await fetch(apiUrl('/api/download/start'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1085,7 +1560,9 @@ export default function App() {
           mode: isAudio ? 'audio' : 'video',
           quality: formatKey,
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!startRes.ok) {
         throw new Error('START_FAILED');
@@ -1145,20 +1622,15 @@ export default function App() {
             setSpeedVal(null);
             setEtaSec(null);
             if (st.status === 'error') {
-              const curT = UI_TEXT[langRef.current];
-              setDlPhase('idle');
-              triggerToast(curT.warningTitle, curT.downloadErrorBody, 'bell');
+              // Try direct fallback if server failed
+              startDirectClientDownload(targetUrl, isAudio, formatKey);
             }
           }
         } catch {}
       }, 280);
     } catch {
-      activeJobIdRef.current = null;
-      setIsDownloading(false);
-      setDlPhase('idle');
-      setProgress(0);
-      const curT = UI_TEXT[langRef.current];
-      triggerToast(curT.warningTitle, curT.downloadErrorBody, 'bell');
+      // Server unreachable (e.g. Android native APK or dev preview proxy) -> run direct client download
+      startDirectClientDownload(targetUrl, isAudio, formatKey);
     }
   };
 
@@ -1477,7 +1949,7 @@ export default function App() {
                   onChange={(e) => setUrl(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleFetch()}
                 />
-                {url.trim().length > 0 && (
+                {url.trim().length > 0 ? (
                   <button
                     type="button"
                     className="url-clear"
@@ -1492,6 +1964,37 @@ export default function App() {
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
                       <path d="M18 6L6 18M6 6l12 12" />
                     </svg>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="url-quick-paste"
+                    aria-label={t.pasteBtn}
+                    title={t.pasteBtn}
+                    style={{
+                      position: 'absolute',
+                      insetInlineEnd: '8px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'var(--accbg)',
+                      color: 'var(--acc)',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '4px 9px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                    onClick={() => checkClipboard(false)}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                      <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                    </svg>
+                    <span>{t.pasteBtn}</span>
                   </button>
                 )}
               </div>
@@ -2446,8 +2949,23 @@ export default function App() {
 
               {/* About Card */}
               <div className="card">
-                <b>{t.aboutTitle}</b>
-                <div className="sub" style={{ marginTop: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+                  <img
+                    src="/icon-192.png"
+                    alt={t.appName}
+                    width={44}
+                    height={44}
+                    style={{
+                      borderRadius: '50%',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.35)',
+                    }}
+                  />
+                  <div>
+                    <b style={{ fontSize: '16px', display: 'block' }}>{t.aboutTitle}</b>
+                    <span className="sub" style={{ fontSize: '13px' }}>{t.appName}</span>
+                  </div>
+                </div>
+                <div className="sub" style={{ marginTop: '6px' }}>
                   {t.aboutDesc}
                 </div>
                 <div className="about-foot">

@@ -1,30 +1,30 @@
 {
-  "version": "1.1.1",
-  "build": 3,
+  "version": "1.2.1",
+  "build": 4,
   "date": "2026-11-12",
-  "title": "تحديث التحميل الفعلي وهوية إنجازاتي البصرية وتطوير الخطوط والأيقونة الداكنة",
-  "title_ar": "تحديث التحميل الفعلي وهوية إنجازاتي البصرية وتطوير الخطوط والأيقونة الداكنة",
-  "title_en": "Real Download Engine, Injazati UI Identity, Font Fixes & Dark Icon",
+  "title": "تحديث معالجة الحافظة التلقائية وزر اللصق والأيقونة الجديدة والتحميل المباشر",
+  "title_ar": "تحديث معالجة الحافظة التلقائية وزر اللصق والأيقونة الجديدة والتحميل المباشر",
+  "title_en": "Auto Clipboard Catch, Fast Paste Button, New Dark Icon & Direct Media Downloads",
   "features": [
-    "التحميل الفعلي الكامل للفيديوهات والصوتيات من يوتيوب وتيك توك وX وإنستغرام وحفظها على الجهاز",
-    "تحديث واجهة المستخدم بالكامل لتطابق الهوية البصرية الأنيقة لتطبيق إنجازاتي",
-    "إصلاح وتحسين تحميل جميع الخطوط العربية واللاتينية بدقة فائقة ودعم أوزان 400 و600 و700",
-    "اعتماد أيقونة التطبيق الرسمية بالوضع الداكن (Dark Mode) الفخم للأندرويد والويب",
-    "إضافة بطاقات مشاركة التطبيق ومشاركة المقترحات ومسح الرابط السريع"
+    "حل مشكلة الحافظة ودعم نظام أندرويد الأصلي (@capacitor/clipboard) لالتقاط الروابط تلقائياً بدون أي أخطاء",
+    "إضافة زر لصق سريع ومباشر داخل مربع الرابط بلمسة واحدة",
+    "تحديث أيقونة التطبيق الرسمية للأندرويد والويب بتصميم داكن فخم وجديد",
+    "نظام معالجة مستقل لجلب معلومات الفيديوهات من يوتيوب وتيك توك بدون علامة مائية ومنصة X مباشرة",
+    "تحسين سرعة واستقرار حفظ الملفات في مجلد التنزيلات بالجهاز"
   ],
   "features_ar": [
-    "التحميل الفعلي الكامل للفيديوهات والصوتيات من يوتيوب وتيك توك وX وإنستغرام وحفظها على الجهاز",
-    "تحديث واجهة المستخدم بالكامل لتطابق الهوية البصرية الأنيقة لتطبيق إنجازاتي",
-    "إصلاح وتحسين تحميل جميع الخطوط العربية واللاتينية بدقة فائقة ودعم أوزان 400 و600 و700",
-    "اعتماد أيقونة التطبيق الرسمية بالوضع الداكن (Dark Mode) الفخم للأندرويد والويب",
-    "إضافة بطاقات مشاركة التطبيق ومشاركة المقترحات ومسح الرابط السريع"
+    "حل مشكلة الحافظة ودعم نظام أندرويد الأصلي (@capacitor/clipboard) لالتقاط الروابط تلقائياً بدون أي أخطاء",
+    "إضافة زر لصق سريع ومباشر داخل مربع الرابط بلمسة واحدة",
+    "تحديث أيقونة التطبيق الرسمية للأندرويد والويب بتصميم داكن فخم وجديد",
+    "نظام معالجة مستقل لجلب معلومات الفيديوهات من يوتيوب وتيك توك بدون علامة مائية ومنصة X مباشرة",
+    "تحسين سرعة واستقرار حفظ الملفات في مجلد التنزيلات بالجهاز"
   ],
   "features_en": [
-    "Real video and audio downloads from YouTube, TikTok, X, Instagram directly to device",
-    "Refined UI fully matching the clean visual identity of Injazati app",
-    "Fixed and optimized all Arabic and Latin font loading with 400, 600, 700 weights",
-    "Set the official app launcher icon to sleek Dark Mode for Android and Web",
-    "Added Share App, Feedback & Suggestions cards, and quick URL clear actions"
+    "Resolved clipboard permission issues with native Android (@capacitor/clipboard) integration",
+    "Added one-tap fast Paste button directly inside the URL input box",
+    "Updated official app launcher icon for Android and Web to the sleek new dark design",
+    "Standalone client resolvers for YouTube, TikTok without watermark, X/Twitter, and direct streams",
+    "Enhanced download stability and speed saving files directly to device Downloads folder"
   ],
   "apkUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest/download/Tanzeelati-Debug.apk",
   "releaseUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest"

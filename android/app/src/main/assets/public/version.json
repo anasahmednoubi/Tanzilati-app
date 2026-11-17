@@ -1,30 +1,27 @@
 {
-  "version": "1.2.1",
-  "build": 4,
-  "date": "2026-11-12",
-  "title": "تحديث معالجة الحافظة التلقائية وزر اللصق والأيقونة الجديدة والتحميل المباشر",
-  "title_ar": "تحديث معالجة الحافظة التلقائية وزر اللصق والأيقونة الجديدة والتحميل المباشر",
-  "title_en": "Auto Clipboard Catch, Fast Paste Button, New Dark Icon & Direct Media Downloads",
+  "version": "1.2.2",
+  "build": 5,
+  "date": "2026-11-15",
+  "title": "خط إنجازاتي الأصلي + محرك تحميل ذاتي متكامل داخل التطبيق بدون مواقع خارجية",
+  "title_ar": "خط إنجازاتي الأصلي + محرك تحميل ذاتي متكامل داخل التطبيق بدون مواقع خارجية",
+  "title_en": "Injazati Header/Splash Typography + Built-in Self-Contained Video & Audio Downloader",
   "features": [
-    "حل مشكلة الحافظة ودعم نظام أندرويد الأصلي (@capacitor/clipboard) لالتقاط الروابط تلقائياً بدون أي أخطاء",
-    "إضافة زر لصق سريع ومباشر داخل مربع الرابط بلمسة واحدة",
-    "تحديث أيقونة التطبيق الرسمية للأندرويد والويب بتصميم داكن فخم وجديد",
-    "نظام معالجة مستقل لجلب معلومات الفيديوهات من يوتيوب وتيك توك بدون علامة مائية ومنصة X مباشرة",
-    "تحسين سرعة واستقرار حفظ الملفات في مجلد التنزيلات بالجهاز"
+    "توحيد خط كلمة «تنزيلاتي» في شاشة التحميل والرأس العلوي مع نفس خط كلمة «إنجازاتي»",
+    "محرك تحميل ذاتي مدمج بالكامل داخل التطبيق للأندرويد والويب (يوتيوب عبر InnerTube + yt-dlp، وتيك توك، وX، وإنستغرام، وفيسبوك)",
+    "دمج الصوت والفيديو عالي الجودة (HD/Full HD) مباشرة على الهاتف بدون فتح أي مواقع خارجية",
+    "شريط تقدم فوري وحقيقي مع دعم استخراج الصوت وحفظ الملفات مباشرة في مجلد التنزيلات"
   ],
   "features_ar": [
-    "حل مشكلة الحافظة ودعم نظام أندرويد الأصلي (@capacitor/clipboard) لالتقاط الروابط تلقائياً بدون أي أخطاء",
-    "إضافة زر لصق سريع ومباشر داخل مربع الرابط بلمسة واحدة",
-    "تحديث أيقونة التطبيق الرسمية للأندرويد والويب بتصميم داكن فخم وجديد",
-    "نظام معالجة مستقل لجلب معلومات الفيديوهات من يوتيوب وتيك توك بدون علامة مائية ومنصة X مباشرة",
-    "تحسين سرعة واستقرار حفظ الملفات في مجلد التنزيلات بالجهاز"
+    "توحيد خط كلمة «تنزيلاتي» في شاشة التحميل والرأس العلوي مع نفس خط كلمة «إنجازاتي»",
+    "محرك تحميل ذاتي مدمج بالكامل داخل التطبيق للأندرويد والويب (يوتيوب عبر InnerTube + yt-dlp، وتيك توك، وX، وإنستغرام، وفيسبوك)",
+    "دمج الصوت والفيديو عالي الجودة (HD/Full HD) مباشرة على الهاتف بدون فتح أي مواقع خارجية",
+    "شريط تقدم فوري وحقيقي مع دعم استخراج الصوت وحفظ الملفات مباشرة في مجلد التنزيلات"
   ],
   "features_en": [
-    "Resolved clipboard permission issues with native Android (@capacitor/clipboard) integration",
-    "Added one-tap fast Paste button directly inside the URL input box",
-    "Updated official app launcher icon for Android and Web to the sleek new dark design",
-    "Standalone client resolvers for YouTube, TikTok without watermark, X/Twitter, and direct streams",
-    "Enhanced download stability and speed saving files directly to device Downloads folder"
+    "Matched the 'Tanzeelati' title font on the Splash screen and top app bar to Injazati's native typography",
+    "Self-contained built-in media engine for Android & Web (YouTube via InnerTube + yt-dlp, TikTok, X, Instagram, and Facebook)",
+    "Native on-device HD video + AAC audio muxing directly inside the app with zero external website redirects",
+    "Real-time download progress, bitrate metrics, and direct saving to the device Downloads folder"
   ],
   "apkUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest/download/Tanzeelati-Debug.apk",
   "releaseUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest"

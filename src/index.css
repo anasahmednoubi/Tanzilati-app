@@ -594,10 +594,13 @@ main {
   min-width: 0;
 }
 
-h1 {
+h1,
+.hd .brand h1 {
+  font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
   font-size: 24px;
   margin: 0;
   font-weight: 700;
+  letter-spacing: 0;
 }
 
 .sub {
@@ -1797,7 +1800,7 @@ button.ghost {
   gap: 16px;
   background: #fff;
   color: #111;
-  font-family: Cairo, system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
   transition: opacity 0.5s ease, visibility 0.5s;
 }
 
@@ -1845,8 +1848,10 @@ button.ghost {
 
 #splash .sp-name {
   margin: 6px 0 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
   font-size: 1.6rem;
   font-weight: 700;
+  letter-spacing: 0;
   animation: spFade 0.5s 0.4s both;
 }
 

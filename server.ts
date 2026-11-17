@@ -29,6 +29,7 @@ interface FormatOption {
   height?: number;
   directUrl?: string;
   audioUrl?: string;
+  userAgent?: string;
 }
 
 interface MediaInfoResult {
@@ -40,11 +41,12 @@ interface MediaInfoResult {
   thumbnail: string;
   platformAr: string;
   platformEn: string;
-  engine: 'yt-dlp' | 'piped' | 'tikwm' | 'fxtwitter' | 'direct';
+  engine: 'yt-dlp' | 'piped' | 'tikwm' | 'fxtwitter' | 'direct' | 'innertube';
   videoOptions: FormatOption[];
   audioOptions: FormatOption[];
   fallbackStreamUrl?: string;
   fallbackAudioUrl?: string;
+  userAgent?: string;
 }
 
 interface DownloadJob {
@@ -133,6 +135,8 @@ function formatBytes(bytes?: number | null): string {
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return '';
+  const match = trimmed.match(/(https?:\/\/[^\s<>"'{}|\\^`]+[^\s<>"'{}|\\^`.,;:!?)\]])/i);
+  if (match) return match[1];
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
 }
@@ -682,6 +686,218 @@ async function resolveDirectMedia(targetUrl: string): Promise<MediaInfoResult | 
   }
 }
 
+const INNERTUBE_VR_UA =
+  'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip';
+
+async function resolveYouTubeViaInnerTube(
+  videoId: string,
+  originalUrl: string
+): Promise<MediaInfoResult | null> {
+  try {
+    const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': INNERTUBE_VR_UA,
+      },
+      body: JSON.stringify({
+        videoId,
+        context: {
+          client: {
+            clientName: 'ANDROID_VR',
+            clientVersion: '1.60.19',
+            androidSdkVersion: 32,
+            osName: 'Android',
+            osVersion: '12L',
+            hl: 'en',
+            gl: 'US',
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(7000),
+    });
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    if (data?.playabilityStatus?.status !== 'OK' || !data?.streamingData) return null;
+
+    const details = data.videoDetails || {};
+    const durSec = Number(details.lengthSeconds) || 120;
+    const thumbs: any[] = details.thumbnail?.thumbnails || [];
+    const thumb =
+      thumbs[thumbs.length - 1]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+    const progFormats: any[] = (data.streamingData.formats || []).filter(
+      (f: any) => f?.url && String(f.mimeType || '').includes('video/mp4')
+    );
+    const adapFormats: any[] = data.streamingData.adaptiveFormats || [];
+
+    const bestAudio =
+      adapFormats
+        .filter((f: any) => f?.url && String(f.mimeType || '').startsWith('audio/mp4'))
+        .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))[0] || null;
+
+    const bestProg = progFormats[progFormats.length - 1] || null;
+    const videoOptions: FormatOption[] = [];
+    const seenHeights = new Set<number>();
+
+    if (bestAudio) {
+      const h264Adaptive = adapFormats
+        .filter(
+          (f: any) =>
+            f?.url &&
+            String(f.mimeType || '').startsWith('video/mp4') &&
+            (String(f.mimeType).includes('avc1') || String(f.mimeType).includes('mp4v'))
+        )
+        .sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
+
+      for (const f of h264Adaptive) {
+        const h = Number(f.height) || 0;
+        if (![1080, 720, 480, 360].includes(h) || seenHeights.has(h)) continue;
+        seenHeights.add(h);
+        const totalBytes =
+          (Number(f.contentLength) || 0) + (Number(bestAudio.contentLength) || 0);
+        videoOptions.push({
+          key: String(h),
+          labelAr: h >= 1080 ? `${h}p (Full HD)` : h === 720 ? `${h}p (HD)` : `${h}p`,
+          labelEn: h >= 1080 ? `${h}p (Full HD)` : h === 720 ? `${h}p (HD)` : `${h}p`,
+          descAr: h >= 720 ? 'MP4 · عالي الوضوح' : 'MP4 · موفر للبيانات',
+          descEn: h >= 720 ? 'MP4 · High Definition' : 'MP4 · Data Saver',
+          sizeText: totalBytes > 0 ? formatBytes(totalBytes) : `${h}p`,
+          height: h,
+          directUrl: f.url,
+          audioUrl: bestAudio.url,
+          userAgent: INNERTUBE_VR_UA,
+        });
+      }
+    }
+
+    if (bestProg) {
+      const ph = Number(bestProg.height) || 360;
+      if (!seenHeights.has(ph)) {
+        seenHeights.add(ph);
+        videoOptions.push({
+          key: String(ph),
+          labelAr: `${ph}p (MP4 مباشر)`,
+          labelEn: `${ph}p (Direct MP4)`,
+          descAr: 'MP4 · صوت وصورة مدمجين',
+          descEn: 'MP4 · Video + Audio',
+          sizeText: formatBytes(Number(bestProg.contentLength) || 0),
+          height: ph,
+          directUrl: bestProg.url,
+          userAgent: INNERTUBE_VR_UA,
+        });
+      }
+    }
+
+    if (videoOptions.length === 0) return null;
+
+    videoOptions.sort((a, b) => (b.height || 0) - (a.height || 0));
+    const top = videoOptions[0];
+    const finalOptions: FormatOption[] = [
+      {
+        key: 'best',
+        labelAr: `أفضل جودة متاحة (${top.height || 360}p)`,
+        labelEn: `Best Available (${top.height || 360}p)`,
+        descAr: top.descAr,
+        descEn: top.descEn,
+        sizeText: top.sizeText,
+        height: top.height,
+        directUrl: top.directUrl,
+        audioUrl: top.audioUrl,
+        userAgent: INNERTUBE_VR_UA,
+      },
+      ...videoOptions,
+    ];
+
+    return {
+      url: originalUrl,
+      title: String(details.title || 'YouTube Video'),
+      author: String(details.author || 'YouTube'),
+      duration: formatDuration(durSec),
+      durationSec: durSec,
+      thumbnail: thumb,
+      platformAr: 'يوتيوب',
+      platformEn: 'YouTube',
+      engine: 'innertube',
+      videoOptions: finalOptions,
+      audioOptions: defaultAudioOptions(durSec),
+      fallbackStreamUrl: bestProg?.url || top.directUrl,
+      fallbackAudioUrl: bestAudio?.url || bestProg?.url,
+      userAgent: INNERTUBE_VR_UA,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveSocialHtmlFallback(targetUrl: string): Promise<MediaInfoResult | null> {
+  try {
+    const mobileUA =
+      'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+    const res = await fetch(targetUrl, {
+      headers: { 'User-Agent': mobileUA },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(7000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const match = html.match(
+      /<meta[^>]+property=["']og:video(?::secure_url)?["'][^>]+content=["']([^"']+)["']|"playable_url_quality_hd"\s*:\s*"([^"]+)"|"playable_url"\s*:\s*"([^"]+)"|"video_url"\s*:\s*"([^"]+)"/i
+    );
+    const rawStream = match?.[1] || match?.[2] || match?.[3] || match?.[4];
+    if (!rawStream) return null;
+    const cleanStream = rawStream
+      .replace(/\\\//g, '/')
+      .replace(/\\u0026/g, '&')
+      .replace(/&amp;/g, '&');
+    if (!cleanStream.startsWith('http')) return null;
+
+    const titleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+    const thumbMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+    const lower = targetUrl.toLowerCase();
+    const platAr = lower.includes('instagram.com')
+      ? 'إنستغرام'
+      : lower.includes('facebook.com') || lower.includes('fb.watch')
+        ? 'فيسبوك'
+        : 'فيديو';
+    const platEn = lower.includes('instagram.com')
+      ? 'Instagram'
+      : lower.includes('facebook.com') || lower.includes('fb.watch')
+        ? 'Facebook'
+        : 'Video';
+
+    return {
+      url: targetUrl,
+      title: (titleMatch?.[1] || `${platEn} Video`).slice(0, 80),
+      author: platEn,
+      duration: '—',
+      durationSec: 60,
+      thumbnail: thumbMatch?.[1]?.replace(/&amp;/g, '&') || '',
+      platformAr: platAr,
+      platformEn: platEn,
+      engine: 'direct',
+      videoOptions: [
+        {
+          key: 'best',
+          labelAr: 'أفضل جودة متاحة (MP4)',
+          labelEn: 'Best Available Quality (MP4)',
+          descAr: 'MP4 · حفظ مباشر',
+          descEn: 'MP4 · Direct Save',
+          sizeText: 'MP4',
+          directUrl: cleanStream,
+          userAgent: mobileUA,
+        },
+      ],
+      audioOptions: defaultAudioOptions(60),
+      fallbackStreamUrl: cleanStream,
+      fallbackAudioUrl: cleanStream,
+      userAgent: mobileUA,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function resolveMediaInfo(rawUrl: string): Promise<MediaInfoResult> {
   const targetUrl = normalizeUrl(rawUrl);
   if (!targetUrl) throw new Error('EMPTY_URL');
@@ -707,7 +923,13 @@ async function resolveMediaInfo(rawUrl: string): Promise<MediaInfoResult> {
     if (direct) return direct;
   }
 
-  // 4. Try yt-dlp (supports 1000+ platforms including Instagram, Facebook, Reddit, SoundCloud, Vimeo, YouTube)
+  // 4. YouTube fast InnerTube resolver first (direct playable MP4/M4A URLs)
+  if (ytId) {
+    const inner = await resolveYouTubeViaInnerTube(ytId, targetUrl);
+    if (inner) return inner;
+  }
+
+  // 5. Try yt-dlp (supports 1000+ platforms including Instagram, Facebook, Reddit, SoundCloud, Vimeo, YouTube)
   const ytDlpBin = await ensureYtDlp();
   if (ytDlpBin) {
     const raw = await runYtDlpJson(ytDlpBin, targetUrl);
@@ -716,13 +938,17 @@ async function resolveMediaInfo(rawUrl: string): Promise<MediaInfoResult> {
     }
   }
 
-  // 5. YouTube fallback via healthy Piped APIs when running on datacenter IP
+  // 6. YouTube fallback via healthy Piped APIs
   if (ytId) {
     const piped = await resolveYouTubeViaPiped(ytId, targetUrl);
     if (piped) return piped;
   }
 
-  // 6. Direct media probe fallback for non-extension URLs
+  // 7. Social HTML OG video extractor (Instagram / Facebook / Reddit)
+  const htmlSocial = await resolveSocialHtmlFallback(targetUrl);
+  if (htmlSocial) return htmlSocial;
+
+  // 8. Direct media probe fallback for non-extension URLs
   const direct = await resolveDirectMedia(targetUrl);
   if (direct) return direct;
 
@@ -761,7 +987,8 @@ async function downloadStreamToFile(
   destPath: string,
   job: DownloadJob,
   startPct: number,
-  endPct: number
+  endPct: number,
+  customUserAgent?: string
 ): Promise<void> {
   const controller = new AbortController();
   job.abortController = controller;
@@ -769,6 +996,7 @@ async function downloadStreamToFile(
   const res = await fetch(streamUrl, {
     headers: {
       'User-Agent':
+        customUserAgent ||
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
     },
     signal: controller.signal,
@@ -856,12 +1084,14 @@ async function processDownloadJob(
         job.status = 'downloading';
         job.phase = 'downloading';
 
+        const ua = chosen?.userAgent || info.userAgent;
+
         if (chosen?.audioUrl && chosen.audioUrl !== videoStreamUrl) {
           // Adaptive separate video + audio -> download both & mux via ffmpeg
           const vTmp = path.join(workDir, 'video.mp4');
           const aTmp = path.join(workDir, 'audio.m4a');
-          await downloadStreamToFile(videoStreamUrl, vTmp, job, 2, 70);
-          await downloadStreamToFile(chosen.audioUrl, aTmp, job, 70, 90);
+          await downloadStreamToFile(videoStreamUrl, vTmp, job, 2, 70, ua);
+          await downloadStreamToFile(chosen.audioUrl, aTmp, job, 70, 90, ua);
           job.status = 'extracting';
           job.phase = 'extracting';
           job.etaSec = 2;
@@ -872,7 +1102,7 @@ async function processDownloadJob(
           await fsp.unlink(vTmp).catch(() => {});
           await fsp.unlink(aTmp).catch(() => {});
         } else {
-          await downloadStreamToFile(videoStreamUrl, finalPath, job, 2, 99);
+          await downloadStreamToFile(videoStreamUrl, finalPath, job, 2, 99, ua);
         }
 
         const stat = await fsp.stat(finalPath);
@@ -893,7 +1123,7 @@ async function processDownloadJob(
 
         job.status = 'downloading';
         job.phase = 'downloading';
-        await downloadStreamToFile(sourceUrl, rawTmp, job, 2, 78);
+        await downloadStreamToFile(sourceUrl, rawTmp, job, 2, 78, info.userAgent);
 
         job.status = 'extracting';
         job.phase = 'extracting';

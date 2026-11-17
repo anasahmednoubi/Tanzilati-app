@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Clipboard } from '@capacitor/clipboard';
 import {
   AppLang,
@@ -106,8 +107,8 @@ interface HistoryEntry {
   fresh?: boolean;
 }
 
-const APP_VERSION = '1.2.1';
-const APP_BUILD = 4;
+const APP_VERSION = '1.2.2';
+const APP_BUILD = 5;
 const GITHUB_REPO = 'anasahmednoubi/Tanzilati-app';
 
 const compareSemver = (a: string, b: string): number => {
@@ -163,6 +164,8 @@ interface ServerFormatOption {
   sizeText: string;
   height?: number;
   directUrl?: string;
+  audioUrl?: string;
+  userAgent?: string;
 }
 
 interface ServerMediaInfo {
@@ -177,7 +180,38 @@ interface ServerMediaInfo {
   engine: string;
   videoOptions: ServerFormatOption[];
   audioOptions: ServerFormatOption[];
+  fallbackStreamUrl?: string;
+  fallbackAudioUrl?: string;
+  userAgent?: string;
 }
+
+interface TanzeelatiMediaPlugin {
+  resolveMedia(options: { url: string }): Promise<ServerMediaInfo>;
+  downloadMedia(options: {
+    jobId: string;
+    url: string;
+    videoUrl?: string;
+    audioUrl?: string;
+    userAgent?: string;
+    qualityKey?: string;
+    filename: string;
+    mimeType: string;
+    isAudio: boolean;
+  }): Promise<{ ok: boolean; jobId: string; filename: string; savedPath?: string; fileSize?: number }>;
+  cancelDownload(options: { jobId: string }): Promise<{ ok: boolean }>;
+  addListener(
+    eventName: 'downloadProgress',
+    listenerFunc: (data: {
+      jobId: string;
+      phase: 'downloading' | 'extracting' | 'complete' | 'cancelled' | 'error';
+      progress: number;
+      speedMBs?: string;
+      etaSec?: number;
+    }) => void
+  ): Promise<{ remove: () => Promise<void> }>;
+}
+
+const TanzeelatiMedia = registerPlugin<TanzeelatiMediaPlugin>('TanzeelatiMedia');
 
 interface CaughtVideoInfo {
   url: string;
@@ -341,179 +375,197 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
       }
     } catch {}
 
-    // Check Piped for direct progressive streams
+    // Check Piped instances for direct progressive streams
     let directVideo: string | undefined;
     let directAudio: string | undefined;
+    for (const host of ['https://api.piped.private.coffee', 'https://pipedapi.kavin.rocks']) {
+      try {
+        const pRes = await fetch(`${host}/streams/${videoId}`, {
+          signal: AbortSignal.timeout(4500),
+        });
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          if (pData.title) title = pData.title;
+          if (pData.uploader) author = pData.uploader;
+          const prog = pData.videoStreams?.find(
+            (v: any) => !v.videoOnly && v.format !== 'HLS' && v.url
+          );
+          if (prog) directVideo = prog.url;
+          const aud = pData.audioStreams?.find((a: any) => a.url);
+          if (aud) directAudio = aud.url;
+          if (directVideo || directAudio) break;
+        }
+      } catch {}
+    }
+
+    if (directVideo || directAudio) {
+      return {
+        url: cleanUrl,
+        title,
+        author,
+        duration: '—',
+        durationSec: 120,
+        thumbnail,
+        platformAr: 'يوتيوب',
+        platformEn: 'YouTube',
+        engine: 'client-yt',
+        videoOptions: directVideo
+          ? [
+              {
+                key: 'best',
+                labelAr: 'أفضل جودة متاحة (MP4)',
+                labelEn: 'Best Available (MP4)',
+                descAr: 'MP4 · حفظ مباشر',
+                descEn: 'MP4 · Direct Save',
+                sizeText: 'MP4',
+                directUrl: directVideo,
+              },
+            ]
+          : [],
+        audioOptions: directAudio || directVideo
+          ? [
+              {
+                key: 'm4a',
+                labelAr: 'M4A – صوت AAC عالي الكفاءة',
+                labelEn: 'M4A – High Efficiency AAC',
+                descAr: 'M4A / AAC',
+                descEn: 'M4A / AAC',
+                sizeText: 'M4A',
+                directUrl: directAudio || directVideo,
+              },
+              {
+                key: 'mp3-320',
+                labelAr: 'MP3 – جودة عالية (320 kbps)',
+                labelEn: 'MP3 – High Quality (320 kbps)',
+                descAr: 'MP3 · أنقى صوت',
+                descEn: 'MP3 · Purest Audio',
+                sizeText: 'MP3',
+                directUrl: directAudio || directVideo,
+              },
+            ]
+          : [],
+      };
+    }
+  }
+
+  // 3. TWITTER / X (fxtwitter first, vxtwitter backup)
+  const twMatch = cleanUrl.match(/(?:twitter\.com|x\.com)\/([^/]+)\/status\/(\d+)/i);
+  if (twMatch) {
+    const screenName = twMatch[1];
+    const tweetId = twMatch[2];
     try {
-      const pRes = await fetch(`https://api.piped.private.coffee/streams/${videoId}`, {
-        signal: AbortSignal.timeout(3500),
+      const fxRes = await fetch(`https://api.fxtwitter.com/${screenName}/status/${tweetId}`, {
+        signal: AbortSignal.timeout(4500),
       });
-      if (pRes.ok) {
-        const pData = await pRes.json();
-        if (pData.title) title = pData.title;
-        if (pData.uploader) author = pData.uploader;
-        const prog = pData.videoStreams?.find((v: any) => !v.videoOnly && v.url);
-        if (prog) directVideo = prog.url;
-        const aud = pData.audioStreams?.find((a: any) => a.url);
-        if (aud) directAudio = aud.url;
+      if (fxRes.ok) {
+        const fxJson = await fxRes.json();
+        const tweet = fxJson?.tweet;
+        const vid = tweet?.media?.videos?.[0];
+        const mp4Variants = (vid?.variants || [])
+          .filter((v: any) => v.content_type === 'video/mp4' && v.url)
+          .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+        const bestUrl = mp4Variants[0]?.url || vid?.url;
+        if (bestUrl) {
+          return {
+            url: cleanUrl,
+            title: (tweet?.text || (isEn ? 'X Video' : 'فيديو منصة X')).slice(0, 70),
+            author: tweet?.author?.name ? `${tweet.author.name} (@${tweet.author.screen_name})` : 'X User',
+            duration: '—',
+            durationSec: vid?.duration || 60,
+            thumbnail: vid?.thumbnail_url || '',
+            platformAr: 'منصة X',
+            platformEn: 'X Platform',
+            engine: 'fxtwitter',
+            videoOptions: [
+              {
+                key: 'best',
+                labelAr: 'أفضل جودة متاحة (MP4)',
+                labelEn: 'Best Available (MP4)',
+                descAr: 'MP4 · جودة أصلية',
+                descEn: 'MP4 · Original Quality',
+                sizeText: 'MP4',
+                directUrl: bestUrl,
+              },
+            ],
+            audioOptions: [
+              {
+                key: 'mp3-320',
+                labelAr: 'MP3 – استخراج الصوت',
+                labelEn: 'MP3 – Audio Extract',
+                descAr: 'MP3 · صوت فقط',
+                descEn: 'MP3 · Audio Only',
+                sizeText: 'MP3',
+                directUrl: bestUrl,
+              },
+            ],
+          };
+        }
       }
     } catch {}
 
-    return {
-      url: cleanUrl,
-      title,
-      author,
-      duration: '3:30',
-      durationSec: 210,
-      thumbnail,
-      platformAr: 'يوتيوب',
-      platformEn: 'YouTube',
-      engine: 'client-yt',
-      videoOptions: [
-        {
-          key: 'best',
-          labelAr: 'أفضل جودة متاحة (1080p)',
-          labelEn: 'Best Available (1080p)',
-          descAr: 'MP4 · عالي الوضوح',
-          descEn: 'MP4 · High Definition',
-          sizeText: '1080p',
-          directUrl: directVideo,
-        },
-        {
-          key: '720',
-          labelAr: '720p (HD)',
-          labelEn: '720p (HD)',
-          descAr: 'MP4 · جودة ممتازة',
-          descEn: 'MP4 · Great Quality',
-          sizeText: '720p',
-          directUrl: directVideo,
-        },
-        {
-          key: '480',
-          labelAr: '480p',
-          labelEn: '480p',
-          descAr: 'MP4 · موفر للبيانات',
-          descEn: 'MP4 · Data Saver',
-          sizeText: '480p',
-          directUrl: directVideo,
-        },
-        {
-          key: '360',
-          labelAr: '360p',
-          labelEn: '360p',
-          descAr: 'MP4 · خفيف وسريع',
-          descEn: 'MP4 · Fast & Light',
-          sizeText: '360p',
-          directUrl: directVideo,
-        },
-      ],
-      audioOptions: [
-        {
-          key: 'mp3-320',
-          labelAr: 'MP3 – جودة عالية (320 kbps)',
-          labelEn: 'MP3 – High Quality (320 kbps)',
-          descAr: 'MP3 · أنقى صوت',
-          descEn: 'MP3 · Purest Audio',
-          sizeText: '~8.2 MB',
-          directUrl: directAudio,
-        },
-        {
-          key: 'mp3-192',
-          labelAr: 'MP3 – جودة متوسطة (192 kbps)',
-          labelEn: 'MP3 – Medium Quality (192 kbps)',
-          descAr: 'MP3 · جودة معيارية',
-          descEn: 'MP3 · Standard Quality',
-          sizeText: '~5.0 MB',
-          directUrl: directAudio,
-        },
-        {
-          key: 'm4a',
-          labelAr: 'M4A – صوت AAC عالي الكفاءة',
-          labelEn: 'M4A – High Efficiency AAC',
-          descAr: 'M4A / AAC',
-          descEn: 'M4A / AAC',
-          sizeText: '~4.2 MB',
-          directUrl: directAudio,
-        },
-      ],
-    };
-  }
-
-  // 3. TWITTER / X
-  const twMatch = cleanUrl.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/i);
-  if (twMatch) {
-    const tweetId = twMatch[1];
     try {
       const res = await fetch(`https://api.vxtwitter.com/Twitter/status/${tweetId}`, {
-        signal: AbortSignal.timeout(4000),
+        signal: AbortSignal.timeout(4500),
       });
       if (res.ok) {
         const j = await res.json();
         const media = j.media_extended?.[0];
         const videoUrl = media?.type === 'video' ? media.url : undefined;
-        return {
-          url: cleanUrl,
-          title: (j.text || (isEn ? 'X / Twitter Video' : 'فيديو منصة X')).slice(0, 60),
-          author: j.user_name ? `${j.user_name} (@${j.user_screen_name})` : 'X User',
-          duration: '1:00',
-          durationSec: 60,
-          thumbnail: media?.thumbnail_url || '',
-          platformAr: 'منصة X',
-          platformEn: 'X Platform',
-          engine: 'vxtwitter',
-          videoOptions: [
-            {
-              key: 'best',
-              labelAr: 'أفضل جودة متاحة (MP4)',
-              labelEn: 'Best Available (MP4)',
-              descAr: 'MP4 · جودة أصلية',
-              descEn: 'MP4 · Original Quality',
-              sizeText: '~10 MB',
-              directUrl: videoUrl,
-            },
-          ],
-          audioOptions: [
-            {
-              key: 'mp3-320',
-              labelAr: 'MP3 – استخراج الصوت',
-              labelEn: 'MP3 – Audio Extract',
-              descAr: 'MP3 · صوت فقط',
-              descEn: 'MP3 · Audio Only',
-              sizeText: '~2.5 MB',
-              directUrl: videoUrl,
-            },
-          ],
-        };
+        if (videoUrl) {
+          return {
+            url: cleanUrl,
+            title: (j.text || (isEn ? 'X / Twitter Video' : 'فيديو منصة X')).slice(0, 70),
+            author: j.user_name ? `${j.user_name} (@${j.user_screen_name})` : 'X User',
+            duration: '—',
+            durationSec: 60,
+            thumbnail: media?.thumbnail_url || '',
+            platformAr: 'منصة X',
+            platformEn: 'X Platform',
+            engine: 'vxtwitter',
+            videoOptions: [
+              {
+                key: 'best',
+                labelAr: 'أفضل جودة متاحة (MP4)',
+                labelEn: 'Best Available (MP4)',
+                descAr: 'MP4 · جودة أصلية',
+                descEn: 'MP4 · Original Quality',
+                sizeText: 'MP4',
+                directUrl: videoUrl,
+              },
+            ],
+            audioOptions: [
+              {
+                key: 'mp3-320',
+                labelAr: 'MP3 – استخراج الصوت',
+                labelEn: 'MP3 – Audio Extract',
+                descAr: 'MP3 · صوت فقط',
+                descEn: 'MP3 · Audio Only',
+                sizeText: 'MP3',
+                directUrl: videoUrl,
+              },
+            ],
+          };
+        }
       }
     } catch {}
   }
 
-  // 4. GENERIC / DIRECT / SOUNDCLOUD / INSTAGRAM / FACEBOOK FALLBACK
-  let platformAr = 'فيديو';
-  let platformEn = 'Video';
-  if (lower.includes('instagram.com')) {
-    platformAr = 'إنستغرام';
-    platformEn = 'Instagram';
-  } else if (lower.includes('facebook.com') || lower.includes('fb.watch')) {
-    platformAr = 'فيسبوك';
-    platformEn = 'Facebook';
-  } else if (lower.includes('soundcloud.com')) {
-    platformAr = 'ساوند كلاود';
-    platformEn = 'SoundCloud';
+  // 4. DIRECT MEDIA FILES ONLY (.mp4, .mp3, etc.)
+  const isDirectMedia = /\.(mp4|m4v|mov|webm|mp3|m4a|aac|wav|ogg)($|\?)/i.test(cleanUrl);
+  if (!isDirectMedia) {
+    return null;
   }
 
-  const isDirectMedia = /\.(mp4|m4v|mov|webm|mp3|m4a|aac|wav|ogg)($|\?)/i.test(cleanUrl);
   const cleanTitle = cleanUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 50);
-
   return {
     url: cleanUrl,
     title: cleanTitle,
-    author: isEn ? (isDirectMedia ? 'Direct Media Stream' : 'Media Link') : (isDirectMedia ? 'ملف وسائط مباشر' : 'رابط وسائط'),
+    author: isEn ? 'Direct Media Stream' : 'ملف وسائط مباشر',
     duration: '—',
     durationSec: 0,
     thumbnail: '',
-    platformAr,
-    platformEn,
+    platformAr: 'ملف مباشر',
+    platformEn: 'Direct Media',
     engine: 'direct',
     videoOptions: [
       {
@@ -522,8 +574,8 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
         labelEn: 'Best Available (MP4)',
         descAr: 'MP4 · جودة كاملة',
         descEn: 'MP4 · Full Quality',
-        sizeText: '~20 MB',
-        directUrl: isDirectMedia ? cleanUrl : undefined,
+        sizeText: 'MP4',
+        directUrl: cleanUrl,
       },
     ],
     audioOptions: [
@@ -533,8 +585,8 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
         labelEn: 'MP3 – Original Audio',
         descAr: 'MP3 · استخراج الصوت',
         descEn: 'MP3 · Audio Extract',
-        sizeText: '~5 MB',
-        directUrl: isDirectMedia ? cleanUrl : undefined,
+        sizeText: 'MP3',
+        directUrl: cleanUrl,
       },
     ],
   };
@@ -1055,29 +1107,45 @@ export default function App() {
   };
 
   const fetchServerInfo = async (targetUrl: string): Promise<ServerMediaInfo | null> => {
-    // 1. Try server API with a timeout
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
-      const res = await fetch(apiUrl('/api/info'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.title) {
-          return data as ServerMediaInfo;
+    const cleanTarget = extractUrlFromText(targetUrl) || targetUrl.trim();
+    const isNativeAndroid = Capacitor.isNativePlatform();
+
+    // 1. On Native Android APK: resolve directly via on-device Java plugin (no server lock, no external site)
+    if (isNativeAndroid) {
+      try {
+        const nativeInfo = await TanzeelatiMedia.resolveMedia({ url: cleanTarget });
+        if (nativeInfo && nativeInfo.title) {
+          return nativeInfo;
         }
-      }
-    } catch {
-      // Server unreachable (e.g. Android native APK or preview cookie redirect)
+      } catch {}
     }
 
-    // 2. Resilient client-side resolver (works 100% on Android APK and offline)
-    return await resolveMediaClientSide(targetUrl, langRef.current);
+    // 2. Try backend server API (/api/info runs yt-dlp + InnerTube + TikWM + FxTwitter)
+    const customApiBase = (import.meta as any).env?.VITE_API_URL;
+    if (!isNativeAndroid || customApiBase) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        const res = await fetch(apiUrl('/api/info'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: cleanTarget }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.title) {
+            return data as ServerMediaInfo;
+          }
+        }
+      } catch {
+        // Server unreachable
+      }
+    }
+
+    // 3. CORS-enabled client-side resolver (TikTok/X/YouTube/Direct)
+    return await resolveMediaClientSide(cleanTarget, langRef.current);
   };
 
   const openCaughtWithRealInfo = (targetUrl: string) => {
@@ -1428,15 +1496,16 @@ export default function App() {
     document.body.removeChild(a);
   };
 
-  // Direct client-side device download (used on Android APK or when backend server is unreachable)
+  // Direct in-app Blob download (when direct CORS media URL is available without backend server)
   const startDirectClientDownload = async (
     targetUrl: string,
     isAudio: boolean,
     formatKey: string
   ) => {
+    const cleanTarget = extractUrlFromText(targetUrl) || targetUrl.trim();
     let meta = customVideoMeta;
-    if (!meta || meta.resolvedUrl !== targetUrl) {
-      const resolved = await resolveMediaClientSide(targetUrl, langRef.current);
+    if (!meta || meta.resolvedUrl !== cleanTarget) {
+      const resolved = await resolveMediaClientSide(cleanTarget, langRef.current);
       if (resolved) {
         meta = {
           title: resolved.title,
@@ -1452,72 +1521,98 @@ export default function App() {
     }
 
     const title = meta?.title || (isAudio ? 'audio' : 'video');
-    const cleanExt = isAudio ? 'mp3' : 'mp4';
+    const cleanExt = isAudio ? (formatKey === 'm4a' ? 'm4a' : 'mp3') : 'mp4';
     const safeTitle =
       title
         .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 60) || 'media';
+        .slice(0, 60) || 'tanzeelati-media';
     const filename = `${safeTitle}.${cleanExt}`;
 
     const optionsList = isAudio ? meta?.audioOptions : meta?.videoOptions;
     const selectedOption = optionsList?.find((o) => o.key === formatKey) || optionsList?.[0];
     const directMediaUrl = selectedOption?.directUrl;
 
-    setShowRes(false);
-    setProgress(10);
-    setSpeedVal('~4.8 MB/s');
-    setEtaSec(5);
-    setIsDownloading(true);
-    setDlPhase(isAudio ? 'extracting' : 'downloading');
+    if (!directMediaUrl) {
+      activeJobIdRef.current = null;
+      setIsDownloading(false);
+      setDlPhase('idle');
+      setProgress(0);
+      setSpeedVal(null);
+      setEtaSec(null);
+      const curT = UI_TEXT[langRef.current];
+      triggerToast(curT.warningTitle, curT.downloadErrorBody, 'bell');
+      return;
+    }
 
-    let p = 10;
-    const interval = window.setInterval(() => {
-      p += Math.floor(Math.random() * 14) + 12;
-      if (p >= 98) {
-        p = 98;
-        clearInterval(interval);
-      }
-      setProgress(p);
-      setEtaSec(Math.max(1, Math.round((100 - p) / 15)));
-    }, 200);
-    timerRef.current = interval;
+    try {
+      setShowRes(false);
+      setProgress(5);
+      setSpeedVal(null);
+      setEtaSec(null);
+      setIsDownloading(true);
+      setDlPhase(isAudio ? 'extracting' : 'downloading');
 
-    setTimeout(() => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
+      const controller = new AbortController();
+      const res = await fetch(directMediaUrl, { signal: controller.signal });
+      if (!res.ok) throw new Error('STREAM_FETCH_FAILED');
+
+      const total = Number(res.headers.get('content-length')) || 0;
+      const reader = res.body?.getReader();
+      let blobUrl = '';
+
+      if (reader) {
+        const chunks: Uint8Array[] = [];
+        let received = 0;
+        let lastTick = Date.now();
+        let lastBytes = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value);
+            received += value.byteLength;
+            const now = Date.now();
+            if (now - lastTick >= 200) {
+              const dt = (now - lastTick) / 1000;
+              const bps = dt > 0 ? (received - lastBytes) / dt : 0;
+              const mbps = (bps / (1024 * 1024)).toFixed(1);
+              setSpeedVal(Number(mbps) > 0 ? mbps : '0.1');
+              if (total > 0) {
+                setProgress(Math.min(98, Math.round((received / total) * 100)));
+                setEtaSec(bps > 0 ? Math.max(1, Math.round((total - received) / bps)) : null);
+              } else {
+                setProgress((prev) => Math.min(95, prev + 3));
+              }
+              lastTick = now;
+              lastBytes = received;
+            }
+          }
+        }
+        const blob = new Blob(chunks as BlobPart[], { type: isAudio ? 'audio/mpeg' : 'video/mp4' });
+        blobUrl = URL.createObjectURL(blob);
+      } else {
+        const blob = await res.blob();
+        blobUrl = URL.createObjectURL(blob);
       }
+
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+
       activeJobIdRef.current = null;
       setIsDownloading(false);
       setProgress(100);
       setDlPhase('complete');
       setEtaSec(0);
       setShowRes(true);
-
-      // Trigger the real file download to device storage
-      if (directMediaUrl) {
-        const a = document.createElement('a');
-        a.href = directMediaUrl;
-        a.download = filename;
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      } else {
-        // Fallback for YouTube or complex streams without direct progressive URL
-        const ytMatch = targetUrl.match(
-          /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|v\/))([a-zA-Z0-9_-]{11})/i
-        );
-        if (ytMatch) {
-          const mobileUrl = `https://y2mate.nu/en1/`;
-          window.open(mobileUrl, '_blank');
-        } else {
-          window.open(targetUrl, '_blank');
-        }
-      }
 
       const curT = UI_TEXT[langRef.current];
       const newEntry: HistoryEntry = {
@@ -1528,10 +1623,19 @@ export default function App() {
       };
       setHistory((prev) => [newEntry, ...prev]);
       triggerToast(curT.completedToastTitle, curT.completedToastBody(filename.slice(0, 28)));
-    }, 1800);
+    } catch {
+      activeJobIdRef.current = null;
+      setIsDownloading(false);
+      setDlPhase('idle');
+      setProgress(0);
+      setSpeedVal(null);
+      setEtaSec(null);
+      const curT = UI_TEXT[langRef.current];
+      triggerToast(curT.warningTitle, curT.downloadErrorBody, 'bell');
+    }
   };
 
-  // Real Server Download Job + Live Progress Polling (with client direct fallback)
+  // Real Server / Native Android Download Job + Live Progress
   const startRealDownload = async (
     targetUrl: string,
     isAudio: boolean,
@@ -1541,6 +1645,7 @@ export default function App() {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    const cleanTarget = extractUrlFromText(targetUrl) || targetUrl.trim();
     setShowRes(false);
     setProgress(2);
     setSpeedVal(null);
@@ -1548,15 +1653,116 @@ export default function App() {
     setIsDownloading(true);
     setDlPhase(isAudio ? 'extracting' : 'downloading');
 
+    const isNativeAndroid = Capacitor.isNativePlatform();
+
+    // Path A: Native Android On-Device Self-Contained Download & Mux Engine (Zero external sites!)
+    if (isNativeAndroid) {
+      const nativeJobId = `apk_${Date.now().toString(36)}`;
+      activeJobIdRef.current = nativeJobId;
+      let progressListenerHandle: { remove: () => Promise<void> } | null = null;
+
+      try {
+        let meta = customVideoMeta;
+        if (!meta || meta.resolvedUrl !== cleanTarget || !(isAudio ? meta.audioOptions : meta.videoOptions)?.some((o) => o.directUrl)) {
+          const fresh = await TanzeelatiMedia.resolveMedia({ url: cleanTarget });
+          if (fresh) {
+            meta = {
+              title: fresh.title,
+              author: fresh.author,
+              duration: fresh.duration,
+              thumbnail: fresh.thumbnail,
+              resolvedUrl: fresh.url,
+              videoOptions: fresh.videoOptions,
+              audioOptions: fresh.audioOptions,
+            };
+            setCustomVideoMeta(meta);
+          }
+        }
+
+        const optionsList = isAudio ? meta?.audioOptions : meta?.videoOptions;
+        const chosen = optionsList?.find((o) => o.key === formatKey) || optionsList?.[0];
+        const safeTitle =
+          (meta?.title || (isAudio ? 'audio' : 'video'))
+            .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 60) || 'tanzeelati-media';
+        const streamUrlLower = (chosen?.directUrl || '').toLowerCase();
+        const isM4aStream =
+          formatKey === 'm4a' ||
+          /mime=audio(%2f|\/)mp4|googlevideo\.com|\.m4a(\?|$)|\.mp4(\?|$)/.test(streamUrlLower);
+        const ext = isAudio ? (isM4aStream ? 'm4a' : 'mp3') : 'mp4';
+        const mimeType = isAudio ? (ext === 'm4a' ? 'audio/mp4' : 'audio/mpeg') : 'video/mp4';
+        const filename = `${safeTitle}.${ext}`;
+
+        progressListenerHandle = await TanzeelatiMedia.addListener('downloadProgress', (ev) => {
+          if (ev.jobId !== nativeJobId) return;
+          if (typeof ev.progress === 'number') setProgress(ev.progress);
+          if (ev.speedMBs) setSpeedVal(ev.speedMBs);
+          if (typeof ev.etaSec === 'number') setEtaSec(ev.etaSec);
+          if (ev.phase === 'extracting') setDlPhase('extracting');
+          else if (ev.phase === 'downloading') setDlPhase('downloading');
+        });
+
+        const res = await TanzeelatiMedia.downloadMedia({
+          jobId: nativeJobId,
+          url: cleanTarget,
+          videoUrl: isAudio ? undefined : chosen?.directUrl,
+          audioUrl: isAudio ? chosen?.directUrl : chosen?.audioUrl,
+          userAgent: chosen?.userAgent,
+          qualityKey: formatKey,
+          filename,
+          mimeType,
+          isAudio,
+        });
+
+        await progressListenerHandle?.remove().catch(() => {});
+        activeJobIdRef.current = null;
+        setIsDownloading(false);
+        setProgress(100);
+        setDlPhase('complete');
+        setEtaSec(0);
+        setShowRes(true);
+
+        const entryName = res.filename || filename;
+        const curT = UI_TEXT[langRef.current];
+        const newEntry: HistoryEntry = {
+          id: uid(),
+          n: entryName,
+          a: isAudio,
+          fresh: true,
+        };
+        setHistory((prev) => [newEntry, ...prev]);
+        triggerToast(curT.completedToastTitle, curT.completedToastBody(entryName.slice(0, 28)));
+        return;
+      } catch (err: any) {
+        await progressListenerHandle?.remove().catch(() => {});
+        activeJobIdRef.current = null;
+        setIsDownloading(false);
+        setSpeedVal(null);
+        setEtaSec(null);
+        if (err?.message === 'CANCELLED') {
+          setDlPhase('cancelled');
+        } else {
+          setDlPhase('idle');
+          setProgress(0);
+          const curT = UI_TEXT[langRef.current];
+          triggerToast(curT.warningTitle, curT.downloadErrorBody, 'bell');
+        }
+        return;
+      }
+    }
+
+    // Path B: Server-Backed Download (yt-dlp + ffmpeg on server.ts)
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
 
       const startRes = await fetch(apiUrl('/api/download/start'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          url: targetUrl,
+          url: cleanTarget,
           mode: isAudio ? 'audio' : 'video',
           quality: formatKey,
         }),
@@ -1622,15 +1828,13 @@ export default function App() {
             setSpeedVal(null);
             setEtaSec(null);
             if (st.status === 'error') {
-              // Try direct fallback if server failed
-              startDirectClientDownload(targetUrl, isAudio, formatKey);
+              startDirectClientDownload(cleanTarget, isAudio, formatKey);
             }
           }
         } catch {}
       }, 280);
     } catch {
-      // Server unreachable (e.g. Android native APK or dev preview proxy) -> run direct client download
-      startDirectClientDownload(targetUrl, isAudio, formatKey);
+      startDirectClientDownload(cleanTarget, isAudio, formatKey);
     }
   };
 
@@ -1643,7 +1847,11 @@ export default function App() {
       if (activeJobIdRef.current) {
         const jid = activeJobIdRef.current;
         activeJobIdRef.current = null;
-        fetch(apiUrl(`/api/download/cancel/${jid}`), { method: 'POST' }).catch(() => {});
+        if (Capacitor.isNativePlatform()) {
+          TanzeelatiMedia.cancelDownload({ jobId: jid }).catch(() => {});
+        } else {
+          fetch(apiUrl(`/api/download/cancel/${jid}`), { method: 'POST' }).catch(() => {});
+        }
       }
       setIsDownloading(false);
       setDlPhase('cancelled');

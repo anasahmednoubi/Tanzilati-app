@@ -487,7 +487,7 @@
 
 html {
   scroll-padding-top: env(safe-area-inset-top, 0px);
-  font-family: var(--ff, "Cairo", system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif);
+  font-family: var(--ff, system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif);
 }
 
 * {
@@ -498,9 +498,11 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: var(--ff, "Cairo", system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif);
+  font-family: var(--ff, system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif);
   line-height: 1.5;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -596,7 +598,7 @@ main {
 
 h1,
 .hd .brand h1 {
-  font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+  font-family: inherit;
   font-size: 24px;
   margin: 0;
   font-weight: 700;
@@ -733,16 +735,16 @@ h1,
 .card {
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 14px;
-  margin-bottom: 12px;
+  border-radius: 18px;
+  padding: 16px;
+  margin-bottom: 14px;
 }
 
 label.t {
   display: block;
   font-weight: 600;
   font-size: 15px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .row {
@@ -761,15 +763,17 @@ label.t {
 
 .url-wrap input[type="text"] {
   width: 100%;
-  min-height: 44px;
-  padding-inline-end: 36px;
+  min-height: 46px;
+  padding-left: 16px;
+  padding-right: 74px;
 }
 
 .url-clear {
   position: absolute;
-  inset-inline-end: 8px;
-  width: 26px;
-  height: 26px;
+  right: 8px;
+  left: auto;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border-radius: 50%;
   background: var(--track);
@@ -778,61 +782,31 @@ label.t {
   place-items: center;
 }
 
-.url-helper {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-  font-size: 13px;
-  color: var(--mute);
-}
-
-.url-clip-btn {
-  background: transparent;
+.url-quick-paste {
+  position: absolute;
+  right: 8px;
+  left: auto;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--accbg);
   color: var(--acc);
-  padding: 4px 2px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
+  border: none;
+  border-radius: 999px;
+  padding: 5px 12px;
+  min-height: 30px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   white-space: nowrap;
-}
-
-.url-try-list {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--mute);
-  flex-wrap: wrap;
-}
-
-.url-try-link {
-  background: transparent;
-  color: var(--text);
-  opacity: 0.76;
-  padding: 3px 2px;
-  border-radius: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.url-try-link:hover {
-  color: var(--acc);
-  opacity: 1;
 }
 
 #fetch {
-  min-height: 44px;
-  padding: 10px 18px;
-  font-weight: 600;
+  min-height: 46px;
+  padding: 10px 20px;
+  font-weight: 700;
   white-space: nowrap;
   flex: none;
 }
@@ -1800,7 +1774,7 @@ button.ghost {
   gap: 16px;
   background: #fff;
   color: #111;
-  font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+  font-family: var(--ff, system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif);
   transition: opacity 0.5s ease, visibility 0.5s;
 }
 
@@ -1848,7 +1822,7 @@ button.ghost {
 
 #splash .sp-name {
   margin: 6px 0 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+  font-family: var(--ff, system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif);
   font-size: 1.6rem;
   font-weight: 700;
   letter-spacing: 0;

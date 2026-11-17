@@ -13,9 +13,6 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script>
       try {
         var t = window.localStorage.getItem('tanzeelati-theme');
@@ -26,10 +23,19 @@
           document.documentElement.dir = 'ltr';
           document.title = 'My Downloads';
         }
+        var f = JSON.parse(window.localStorage.getItem('font-v1') || 'null');
+        if (f && f.f) {
+          document.documentElement.style.setProperty('--ff', '"' + f.f + '",system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif');
+          var fl = document.createElement('link');
+          fl.rel = 'stylesheet';
+          fl.href = 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(f.f).replace(/%20/g, '+') + ':wght@400;600;700&display=swap';
+          document.head.appendChild(fl);
+        }
+        if (f && f.s) document.documentElement.style.setProperty('--zs', String(f.s));
       } catch (e) {}
     </script>
-    <script type="module" crossorigin src="/assets/index-TYIxDB_1.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-WDFaW9un.css">
+    <script type="module" crossorigin src="/assets/index-DaLQOyuX.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CXC89lFT.css">
   </head>
   <body>
     <div id="splash" aria-hidden="true">
@@ -39,7 +45,7 @@
         <path class="sar" d="M24 14.5v12M18 21.5l6 6 6-6" fill="none" stroke="var(--lar)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" />
         <path class="tray" d="M18 33h12" fill="none" stroke="var(--lar)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
-      <div class="sp-name" id="spName" style="font-family:system-ui,-apple-system,'Segoe UI',Tahoma,sans-serif;font-weight:700">تنزيلاتي</div>
+      <div class="sp-name" id="spName">تنزيلاتي</div>
       <div class="dots"><i></i><i></i><i></i></div>
     </div>
     <script>

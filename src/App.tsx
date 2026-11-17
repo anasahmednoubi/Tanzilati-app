@@ -672,8 +672,6 @@ export default function App() {
   const [mode, setMode] = useState<'video' | 'audio'>('video');
   const [qv, setQv] = useState<string>(OPTIONS_I18N.ar.video[0][0]);
   const [ddOpen, setDdOpen] = useState(false);
-  const [savePath, setSavePath] = useState('~/Downloads');
-  const [isChangingPath, setIsChangingPath] = useState(false);
 
   // Video Details in Main Card (null means prompt/default)
   const [customVideoMeta, setCustomVideoMeta] = useState<{
@@ -1229,14 +1227,6 @@ export default function App() {
     };
   }, []);
 
-  // Open real sample link in bottom sheet for quick testing
-  const simulateCopyLink = (sampleUrl: string) => {
-    lastClipboardRef.current = sampleUrl;
-    const initial = parseVideoMetadata(sampleUrl, lang);
-    openCaughtWithRealInfo(sampleUrl);
-    triggerToast(t.newLinkToast, t.platformCaptured(initial.platform));
-  };
-
   // Load Google fonts reliably (single font on boot, or batched group on picker open)
   const loadedFontsRef = useRef<Record<string, boolean>>({});
   const loadedGroupsRef = useRef<Record<string, boolean>>({});
@@ -1274,7 +1264,7 @@ export default function App() {
       loadFont(fontFamily);
       document.documentElement.style.setProperty(
         '--ff',
-        `"${fontFamily}", "Cairo", system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`
+        `"${fontFamily}", system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`
       );
     } else {
       document.documentElement.style.removeProperty('--ff');
@@ -2179,23 +2169,6 @@ export default function App() {
                     className="url-quick-paste"
                     aria-label={t.pasteBtn}
                     title={t.pasteBtn}
-                    style={{
-                      position: 'absolute',
-                      insetInlineEnd: '8px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      background: 'var(--accbg)',
-                      color: 'var(--acc)',
-                      border: 'none',
-                      borderRadius: '8px',
-                      padding: '4px 9px',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                    }}
                     onClick={() => checkClipboard(false)}
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
@@ -2209,48 +2182,6 @@ export default function App() {
               <button id="fetch" disabled={isFetching} onClick={handleFetch}>
                 {isFetching ? t.fetching : t.fetch}
               </button>
-            </div>
-
-            <div className="url-helper">
-              <button
-                type="button"
-                className="url-clip-btn"
-                onClick={() => checkClipboard(false)}
-                title={t.checkClipboardTitle}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-                </svg>
-                <span>{t.checkClipboardBtn}</span>
-              </button>
-
-              <div className="url-try-list">
-                <span>{t.simulateCopy}</span>
-                <button
-                  type="button"
-                  className="url-try-link"
-                  onClick={() => simulateCopyLink('https://www.tiktok.com/@tiktok/video/7106594312292453675')}
-                >
-                  {t.tiktok}
-                </button>
-                <span aria-hidden="true">·</span>
-                <button
-                  type="button"
-                  className="url-try-link"
-                  onClick={() => simulateCopyLink('https://www.youtube.com/watch?v=dQw4w9WgXcQ')}
-                >
-                  {t.youtube}
-                </button>
-                <span aria-hidden="true">·</span>
-                <button
-                  type="button"
-                  className="url-try-link"
-                  onClick={() => simulateCopyLink('https://soundcloud.com/forss/flickermood')}
-                >
-                  {t.audioSample}
-                </button>
-              </div>
             </div>
             <div className={`reveal ${isRevealed ? 'open' : ''}`} id="rv">
               <div>
@@ -2363,40 +2294,6 @@ export default function App() {
             <p className="hint" id="hint">
               {HINTS[mode]}
             </p>
-
-            <div className="dir">
-              {isChangingPath ? (
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', width: '100%' }}>
-                  <input
-                    type="text"
-                    value={savePath}
-                    onChange={(e) => setSavePath(e.target.value)}
-                    style={{ padding: '6px 12px', fontSize: '13px' }}
-                    autoFocus
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setIsChangingPath(false)}
-                    style={{ padding: '6px 12px', fontSize: '13px' }}
-                  >
-                    {t.save}
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <span>
-                    {t.saveIn} <code>{savePath}</code>
-                  </span>
-                  <button
-                    className="ghost"
-                    type="button"
-                    onClick={() => setIsChangingPath(true)}
-                  >
-                    {t.change}
-                  </button>
-                </>
-              )}
-            </div>
           </section>
 
           <button
@@ -2419,26 +2316,28 @@ export default function App() {
             <span id="goT">{isDownloading ? t.cancel : t.download}</span>
           </button>
 
-          <section className="card" aria-live="polite">
-            <div className="top">
-              <span id="state">{stateText}</span>
-              <b id="pct">{Math.floor(progress)}%</b>
-            </div>
-            <div className="bar">
-              <div
-                className={`fill ${isDownloading ? 'run' : ''}`}
-                id="bar"
-                style={{ width: `${progress}%` }}
-              ></div>
-            </div>
-            <div className="meta">
-              <span id="speed">{speedText}</span>
-              <span id="eta">{etaText}</span>
-            </div>
-            <div className={`result ${showRes ? 'show' : ''}`} id="res">
-              {t.savedResult}
-            </div>
-          </section>
+          {(isDownloading || dlPhase !== 'idle') && (
+            <section className="card" aria-live="polite" style={{ animation: 'pop 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
+              <div className="top">
+                <span id="state">{stateText}</span>
+                <b id="pct">{Math.floor(progress)}%</b>
+              </div>
+              <div className="bar">
+                <div
+                  className={`fill ${isDownloading ? 'run' : ''}`}
+                  id="bar"
+                  style={{ width: `${progress}%` }}
+                ></div>
+              </div>
+              <div className="meta">
+                <span id="speed">{speedText}</span>
+                <span id="eta">{etaText}</span>
+              </div>
+              <div className={`result ${showRes ? 'show' : ''}`} id="res">
+                {t.savedResult}
+              </div>
+            </section>
+          )}
         </div>
 
         {/* Tab: History (#pS) */}
@@ -2570,7 +2469,7 @@ export default function App() {
                       }
                     }}
                   >
-                    <span style={fontFamily ? { fontFamily: `'${fontFamily}', "Cairo", sans-serif` } : {}}>
+                    <span style={fontFamily ? { fontFamily: `'${fontFamily}', system-ui, sans-serif` } : {}}>
                       {fontFamily || t.defaultLabel}
                     </span>
                     <span style={{ display: 'inline-flex' }}>
@@ -2600,7 +2499,7 @@ export default function App() {
                             <button
                               key={fontName}
                               className={`fi ${fontFamily === fontName ? 'on' : ''}`}
-                              style={{ fontFamily: `'${fontName}', "Cairo", sans-serif` }}
+                              style={{ fontFamily: `'${fontName}', system-ui, sans-serif` }}
                               onClick={() => {
                                 setFontFamily(fontName);
                                 setFOpen(false);
@@ -3246,8 +3145,6 @@ export default function App() {
             </>
           )}
         </div>
-
-        <p className="note">{t.previewNote}</p>
       </main>
 
       {/* Floating Bottom Dock (#dock) */}

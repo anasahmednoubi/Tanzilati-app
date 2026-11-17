@@ -3,6 +3,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 
@@ -11,7 +13,23 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = Number(process.env.PORT) || 3000;
+function resolvePort(): number {
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--port' && argv[i + 1]) {
+      const p = Number(argv[i + 1]);
+      if (Number.isFinite(p) && p > 0) return p;
+    } else if (argv[i].startsWith('--port=')) {
+      const p = Number(argv[i].slice('--port='.length));
+      if (Number.isFinite(p) && p > 0) return p;
+    }
+  }
+  const envPort = Number(process.env.PORT);
+  if (Number.isFinite(envPort) && envPort > 0 && envPort !== 8080) return envPort;
+  return Number(process.env.DEFAULT_APP_PORT) || 3000;
+}
+
+const PORT = resolvePort();
 const TMP_DIR = '/tmp/tanzeelati-dl';
 const YTDLP_PATH = '/tmp/yt-dlp';
 const YTDLP_RELEASE_URL =
@@ -98,8 +116,7 @@ async function ensureYtDlp(): Promise<string | null> {
       });
       if (!res.ok || !res.body) return null;
       const tmpPart = `${YTDLP_PATH}.part`;
-      const buf = Buffer.from(await res.arrayBuffer());
-      await fsp.writeFile(tmpPart, buf);
+      await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(tmpPart));
       await fsp.chmod(tmpPart, 0o755);
       await fsp.rename(tmpPart, YTDLP_PATH);
       return YTDLP_PATH;
@@ -1472,20 +1489,39 @@ async function startServer() {
       res.sendFile(path.join(distDir, 'index.html'));
     });
   } else {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
+    const viteReadyPromise = import('vite').then(({ createServer: createViteServer }) =>
+      createViteServer({
+        server: {
+          middlewareMode: true,
+          hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+        },
+        appType: 'spa',
+      })
+    );
+    viteReadyPromise.catch((err) => {
+      console.error('Failed to initialize Vite dev middleware:', err);
     });
-    app.use(vite.middlewares);
+    app.use((req, res, next) => {
+      viteReadyPromise
+        .then((vite) => vite.middlewares(req, res, next))
+        .catch(next);
+    });
   }
-
-  // Warm up yt-dlp binary quietly in background
-  ensureYtDlp().catch(() => {});
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Tanzeelati server running on http://0.0.0.0:${PORT}`);
+    // Warm up yt-dlp binary after server is ready so boot stays fast
+    setTimeout(() => {
+      ensureYtDlp().catch(() => {});
+    }, 4000);
   });
 }
 
-startServer();
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', err);
+});
+
+startServer().catch((err) => {
+  console.error('Failed to start Tanzeelati server:', err);
+  process.exit(1);
+});

@@ -107,8 +107,8 @@ interface HistoryEntry {
   fresh?: boolean;
 }
 
-const APP_VERSION = '1.2.2';
-const APP_BUILD = 5;
+const APP_VERSION = '1.2.3';
+const APP_BUILD = 6;
 const GITHUB_REPO = 'anasahmednoubi/Tanzilati-app';
 
 const compareSemver = (a: string, b: string): number => {
@@ -187,6 +187,8 @@ interface ServerMediaInfo {
 
 interface TanzeelatiMediaPlugin {
   resolveMedia(options: { url: string }): Promise<ServerMediaInfo>;
+  getPendingSharedUrl(): Promise<{ url: string; subject?: string }>;
+  clearPendingSharedUrl(): Promise<{ ok: boolean }>;
   downloadMedia(options: {
     jobId: string;
     url: string;
@@ -209,6 +211,10 @@ interface TanzeelatiMediaPlugin {
       etaSec?: number;
     }) => void
   ): Promise<{ remove: () => Promise<void> }>;
+  addListener(
+    eventName: 'sharedLinkReceived',
+    listenerFunc: (data: { url: string; subject?: string }) => void
+  ): Promise<{ remove: () => Promise<void> }>;
 }
 
 const TanzeelatiMedia = registerPlugin<TanzeelatiMediaPlugin>('TanzeelatiMedia');
@@ -222,6 +228,7 @@ interface CaughtVideoInfo {
   thumbnail?: string;
   videoOptions?: ServerFormatOption[];
   audioOptions?: ServerFormatOption[];
+  source?: 'share' | 'clipboard';
 }
 
 // Cleanly extract a real URL from messy user-copied text
@@ -770,11 +777,13 @@ export default function App() {
   const [authInfo, setAuthInfo] = useState('');
   const [toastMsg, setToastMsg] = useState<{ title: string; body: string; icon?: 'check' | 'bell' } | null>(null);
 
-  // --- Clipboard Catcher State ---
+  // --- Clipboard & Share Sheet Catcher State ---
   const [caughtVideo, setCaughtVideo] = useState<CaughtVideoInfo | null>(null);
   const [caughtMode, setCaughtMode] = useState<'video' | 'audio'>('video');
   const [caughtQuality, setCaughtQuality] = useState<string>(OPTIONS_I18N.ar.video[0][0]);
+  const [isResolvingCaught, setIsResolvingCaught] = useState(false);
   const lastClipboardRef = useRef<string>('');
+  const lastShareHandledAtRef = useRef<number>(0);
 
   // --- GitHub App Update State ---
   const [updateStatus, setUpdateStatus] = useState<
@@ -1146,37 +1155,62 @@ export default function App() {
     return await resolveMediaClientSide(cleanTarget, langRef.current);
   };
 
-  const openCaughtWithRealInfo = (targetUrl: string) => {
-    const initial = parseVideoMetadata(targetUrl, langRef.current);
+  const openCaughtWithRealInfo = (
+    targetUrl: string,
+    source: 'share' | 'clipboard' = 'clipboard',
+    sharedSubject?: string
+  ) => {
+    const cleanTarget = extractUrlFromText(targetUrl) || targetUrl.trim();
+    const initial = parseVideoMetadata(cleanTarget, langRef.current);
+    if (sharedSubject && sharedSubject.trim()) {
+      initial.title = sharedSubject.trim();
+    }
+    initial.source = source;
+
+    if (source === 'share') {
+      lastShareHandledAtRef.current = Date.now();
+      lastClipboardRef.current = cleanTarget;
+      setUrl(cleanTarget);
+    }
+
     setCaughtVideo(initial);
     setCaughtMode('video');
     setCaughtQuality(OPTIONS_I18N[langRef.current].video[0][0]);
+    setIsResolvingCaught(true);
 
-    fetchServerInfo(targetUrl).then((real) => {
-      if (!real) return;
-      const isEn = langRef.current === 'en';
-      setCaughtVideo((prev) =>
-        prev && prev.url === targetUrl
-          ? {
-              url: real.url,
-              title: real.title,
-              author: real.author,
-              duration: real.duration,
-              platform: isEn ? real.platformEn : real.platformAr,
-              thumbnail: real.thumbnail,
-              videoOptions: real.videoOptions,
-              audioOptions: real.audioOptions,
-            }
-          : prev
-      );
-      if (real.videoOptions.length > 0) {
-        setCaughtQuality(real.videoOptions[0].key);
-      }
-    });
+    fetchServerInfo(cleanTarget)
+      .then((real) => {
+        if (!real) return;
+        const isEn = langRef.current === 'en';
+        setCaughtVideo((prev) =>
+          prev && prev.url === cleanTarget
+            ? {
+                url: real.url,
+                title: real.title,
+                author: real.author,
+                duration: real.duration,
+                platform: isEn ? real.platformEn : real.platformAr,
+                thumbnail: real.thumbnail,
+                videoOptions: real.videoOptions,
+                audioOptions: real.audioOptions,
+                source,
+              }
+            : prev
+        );
+        if (real.videoOptions.length > 0) {
+          setCaughtQuality(real.videoOptions[0].key);
+        }
+      })
+      .finally(() => {
+        setIsResolvingCaught(false);
+      });
   };
 
   // Check clipboard safely across Capacitor Android & Web
   const checkClipboard = async (silent = true) => {
+    if (silent && Date.now() - lastShareHandledAtRef.current < 4000) {
+      return;
+    }
     const curT = UI_TEXT[langRef.current];
     try {
       const rawText = await readClipboardSafely();
@@ -1192,14 +1226,14 @@ export default function App() {
         if (extracted !== lastClipboardRef.current) {
           lastClipboardRef.current = extracted;
           setUrl(extracted);
-          openCaughtWithRealInfo(extracted);
+          openCaughtWithRealInfo(extracted, 'clipboard');
           triggerToast(
             curT.linkDetectedToast,
             curT.linkCaptured(extracted.replace(/^https?:\/\/(www\.)?/, '').slice(0, 24))
           );
         } else if (!silent) {
           setUrl(extracted);
-          openCaughtWithRealInfo(extracted);
+          openCaughtWithRealInfo(extracted, 'clipboard');
         }
       } else {
         if (!silent) {
@@ -1214,16 +1248,56 @@ export default function App() {
     }
   };
 
-  // Monitor window focus for clipboard changes
+  // Monitor window focus for clipboard changes + listen for Android Share Sheet & Web Share Target
   useEffect(() => {
     const handleFocus = () => {
       checkClipboard(true);
     };
     window.addEventListener('focus', handleFocus);
     document.addEventListener('visibilitychange', handleFocus);
+
+    // 1. Web Share Target query params (?url=... or ?text=...&title=...)
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const sharedParam = sp.get('url') || sp.get('text') || '';
+      const sharedSubject = sp.get('title') || '';
+      const webSharedUrl = extractUrlFromText(sharedParam);
+      if (webSharedUrl) {
+        openCaughtWithRealInfo(webSharedUrl, 'share', sharedSubject);
+        const cleanHref = `${window.location.pathname}${window.location.hash || ''}`;
+        window.history.replaceState({}, document.title, cleanHref);
+      }
+    } catch {}
+
+    // 2. Native Android ACTION_SEND Share Sheet (cold start + warm onNewIntent)
+    let shareListenerHandle: { remove: () => Promise<void> } | null = null;
+    if (Capacitor.isNativePlatform()) {
+      TanzeelatiMedia.getPendingSharedUrl()
+        .then((res) => {
+          const clean = extractUrlFromText(res?.url);
+          if (clean) {
+            openCaughtWithRealInfo(clean, 'share', res?.subject);
+          }
+        })
+        .catch(() => {});
+
+      TanzeelatiMedia.addListener('sharedLinkReceived', (data) => {
+        const clean = extractUrlFromText(data?.url);
+        if (clean) {
+          TanzeelatiMedia.clearPendingSharedUrl().catch(() => {});
+          openCaughtWithRealInfo(clean, 'share', data?.subject);
+        }
+      })
+        .then((handle) => {
+          shareListenerHandle = handle;
+        })
+        .catch(() => {});
+    }
+
     return () => {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleFocus);
+      shareListenerHandle?.remove().catch(() => {});
     };
   }, []);
 
@@ -1629,7 +1703,16 @@ export default function App() {
   const startRealDownload = async (
     targetUrl: string,
     isAudio: boolean,
-    formatKey: string
+    formatKey: string,
+    overrideMeta?: {
+      title: string;
+      author: string;
+      duration: string;
+      thumbnail?: string;
+      resolvedUrl?: string;
+      videoOptions?: ServerFormatOption[];
+      audioOptions?: ServerFormatOption[];
+    }
   ) => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -1652,7 +1735,7 @@ export default function App() {
       let progressListenerHandle: { remove: () => Promise<void> } | null = null;
 
       try {
-        let meta = customVideoMeta;
+        let meta = overrideMeta || customVideoMeta;
         if (!meta || meta.resolvedUrl !== cleanTarget || !(isAudio ? meta.audioOptions : meta.videoOptions)?.some((o) => o.directUrl)) {
           const fresh = await TanzeelatiMedia.resolveMedia({ url: cleanTarget });
           if (fresh) {
@@ -1859,11 +1942,10 @@ export default function App() {
     startRealDownload(targetUrl, mode === 'audio', qv);
   };
 
-  // Apply and start download directly from Caught Video Sheet
+  // Apply and start download directly from Share / Caught Video Sheet
   const handleDownloadFromCaught = () => {
     if (!caughtVideo) return;
-    setUrl(caughtVideo.url);
-    setCustomVideoMeta({
+    const nextMeta = {
       title: caughtVideo.title,
       author: caughtVideo.author,
       duration: caughtVideo.duration,
@@ -1871,13 +1953,15 @@ export default function App() {
       resolvedUrl: caughtVideo.url,
       videoOptions: caughtVideo.videoOptions,
       audioOptions: caughtVideo.audioOptions,
-    });
+    };
+    setUrl(caughtVideo.url);
+    setCustomVideoMeta(nextMeta);
     setIsRevealed(true);
     setMode(caughtMode);
     setQv(caughtQuality);
     setCaughtVideo(null);
     switchTab('D');
-    startRealDownload(caughtVideo.url, caughtMode === 'audio', caughtQuality);
+    startRealDownload(caughtVideo.url, caughtMode === 'audio', caughtQuality, nextMeta);
   };
 
   // Just load the caught video into the input
@@ -3221,13 +3305,14 @@ export default function App() {
         </button>
       </div>
 
-      {/* --- Clipboard Link Caught Drawer / Sheet --- */}
+      {/* --- Shared / Clipboard Link Format & Quality Sheet --- */}
       {caughtVideo && (
         <div
           className="sheet-backdrop"
           onClick={() => setCaughtVideo(null)}
           role="dialog"
           aria-modal="true"
+          aria-labelledby="caughtSheetTitle"
         >
           <div
             className="sheet-container"
@@ -3236,28 +3321,18 @@ export default function App() {
           >
             <div className="sheet-handle"></div>
 
-            <div className="flex items-center justify-between gap-3 mb-3">
-              <div className="flex items-center gap-2">
-                <span
-                  style={{
-                    background: 'var(--accbg)',
-                    color: 'var(--acc)',
-                    padding: '4px 8px',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                  }}
-                >
-                  {caughtVideo.platform}
-                </span>
-                <b style={{ fontSize: '17px', color: 'var(--text)' }}>
-                  {t.caughtTitle}
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div style={{ minWidth: 0 }}>
+                <div className="sheet-meta-kicker">
+                  {caughtVideo.platform} · {caughtVideo.duration}
+                </div>
+                <b id="caughtSheetTitle" style={{ fontSize: '18px', color: 'var(--text)', lineHeight: 1.3, display: 'block' }}>
+                  {caughtVideo.source === 'share' ? t.sharedTitle : t.caughtTitle}
                 </b>
               </div>
               <button
                 type="button"
-                className="ghost"
-                style={{ padding: '6px 10px', fontSize: '13px' }}
+                className="ghost sheet-close"
                 onClick={() => setCaughtVideo(null)}
               >
                 {t.close}
@@ -3270,8 +3345,8 @@ export default function App() {
                 <div
                   className="thumb"
                   style={{
-                    width: '90px',
-                    height: '52px',
+                    width: '92px',
+                    height: '54px',
                     ...(caughtVideo.thumbnail
                       ? {
                           backgroundImage: `url(${caughtVideo.thumbnail})`,
@@ -3283,11 +3358,11 @@ export default function App() {
                   aria-hidden="true"
                 ></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <b style={{ fontSize: '14px', display: 'block', lineHeight: '1.3' }}>
+                  <b style={{ fontSize: '14px', display: 'block', lineHeight: '1.35', wordBreak: 'break-word' }}>
                     {caughtVideo.title}
                   </b>
-                  <span className="sub" style={{ fontSize: '12px', marginTop: '2px', display: 'block' }}>
-                    {caughtVideo.author} · {caughtVideo.duration}
+                  <span className="sub" style={{ fontSize: '12.5px', marginTop: '3px', display: 'block' }}>
+                    {isResolvingCaught ? t.resolvingQualities : caughtVideo.author}
                   </span>
                 </div>
               </div>
@@ -3310,15 +3385,17 @@ export default function App() {
             </div>
 
             {/* Selection: Video or Audio */}
-            <div style={{ marginBottom: '12px' }}>
-              <label className="t" style={{ fontSize: '14px', marginBottom: '6px' }}>
+            <div style={{ marginBottom: '14px' }}>
+              <label className="t" style={{ fontSize: '14px', marginBottom: '8px' }}>
                 {t.howToDownload}
               </label>
-              <div className="mt" data-m={caughtMode} role="tablist">
+              <div className="mt" data-m={caughtMode} role="tablist" style={{ marginBottom: 0 }}>
                 <span className="pill"></span>
                 <button
                   className={caughtMode === 'video' ? 'on' : ''}
                   type="button"
+                  role="tab"
+                  aria-selected={caughtMode === 'video'}
                   onClick={() => {
                     setCaughtMode('video');
                     setCaughtQuality(
@@ -3331,6 +3408,8 @@ export default function App() {
                 <button
                   className={caughtMode === 'audio' ? 'on' : ''}
                   type="button"
+                  role="tab"
+                  aria-selected={caughtMode === 'audio'}
                   onClick={() => {
                     setCaughtMode('audio');
                     setCaughtQuality(
@@ -3345,7 +3424,7 @@ export default function App() {
 
             {/* Selection: Quality Picker Grid */}
             <div>
-              <label className="t" style={{ fontSize: '14px', marginBottom: '6px' }}>
+              <label className="t" style={{ fontSize: '14px', marginBottom: '2px' }}>
                 {t.whichQuality}
               </label>
               <div className="q-grid">
@@ -3365,17 +3444,17 @@ export default function App() {
                       ])
                     : OPTIONS[caughtMode]
                 ).map(([keyVal, label, desc, size]) => (
-                  <div
+                  <button
+                    type="button"
                     key={keyVal}
                     className={`q-opt ${caughtQuality === keyVal ? 'on' : ''}`}
+                    aria-pressed={caughtQuality === keyVal}
                     onClick={() => setCaughtQuality(keyVal)}
                   >
                     <b>{label}</b>
                     <span>{desc}</span>
-                    <span style={{ fontWeight: 600, color: 'var(--acc)', marginTop: '4px' }}>
-                      {size}
-                    </span>
-                  </div>
+                    <span className="q-size">{size}</span>
+                  </button>
                 ))}
               </div>
             </div>
@@ -3385,7 +3464,7 @@ export default function App() {
               <button
                 type="button"
                 className="go"
-                style={{ margin: 0, padding: '13px' }}
+                style={{ margin: 0, padding: '14px', minHeight: '48px' }}
                 onClick={handleDownloadFromCaught}
               >
                 <svg
@@ -3406,7 +3485,7 @@ export default function App() {
               <button
                 type="button"
                 className="ghost"
-                style={{ width: '100%', padding: '10px' }}
+                style={{ width: '100%', padding: '11px', minHeight: '44px' }}
                 onClick={handleOpenCaughtInApp}
               >
                 {t.openInDownloadTab}

@@ -1,27 +1,27 @@
 {
-  "version": "1.2.2",
-  "build": 5,
-  "date": "2026-11-15",
-  "title": "خط إنجازاتي الأصلي + محرك تحميل ذاتي متكامل داخل التطبيق بدون مواقع خارجية",
-  "title_ar": "خط إنجازاتي الأصلي + محرك تحميل ذاتي متكامل داخل التطبيق بدون مواقع خارجية",
-  "title_en": "Injazati Header/Splash Typography + Built-in Self-Contained Video & Audio Downloader",
+  "version": "1.2.3",
+  "build": 6,
+  "date": "2026-11-17",
+  "title": "المشاركة المباشرة من التطبيقات + واجهة أبسط بنفس خط وهوية إنجازاتي",
+  "title_ar": "المشاركة المباشرة من التطبيقات + واجهة أبسط بنفس خط وهوية إنجازاتي",
+  "title_en": "Direct Share Sheet Integration + Cleaner Injazati Visual Identity",
   "features": [
-    "توحيد خط كلمة «تنزيلاتي» في شاشة التحميل والرأس العلوي مع نفس خط كلمة «إنجازاتي»",
-    "محرك تحميل ذاتي مدمج بالكامل داخل التطبيق للأندرويد والويب (يوتيوب عبر InnerTube + yt-dlp، وتيك توك، وX، وإنستغرام، وفيسبوك)",
-    "دمج الصوت والفيديو عالي الجودة (HD/Full HD) مباشرة على الهاتف بدون فتح أي مواقع خارجية",
-    "شريط تقدم فوري وحقيقي مع دعم استخراج الصوت وحفظ الملفات مباشرة في مجلد التنزيلات"
+    "المشاركة المباشرة من يوتيوب وتيك توك وجميع التطبيقات مع فتح نافذة فورية لاختيار فيديو أو صوت وتحديد الجودة",
+    "توحيد الخط الافتراضي وشاشة التحميل مع نفس الهوية البصرية لتطبيق إنجازاتي",
+    "تبسيط واجهة التحميل وإزالة المشتتات وإصلاح محاذاة أزرار اللصق والمسح داخل حقل الرابط",
+    "تحسين مقاس أيقونة التطبيق وتناسق الدائرة الداخلية وتسريع استجابة التشغيل"
   ],
   "features_ar": [
-    "توحيد خط كلمة «تنزيلاتي» في شاشة التحميل والرأس العلوي مع نفس خط كلمة «إنجازاتي»",
-    "محرك تحميل ذاتي مدمج بالكامل داخل التطبيق للأندرويد والويب (يوتيوب عبر InnerTube + yt-dlp، وتيك توك، وX، وإنستغرام، وفيسبوك)",
-    "دمج الصوت والفيديو عالي الجودة (HD/Full HD) مباشرة على الهاتف بدون فتح أي مواقع خارجية",
-    "شريط تقدم فوري وحقيقي مع دعم استخراج الصوت وحفظ الملفات مباشرة في مجلد التنزيلات"
+    "المشاركة المباشرة من يوتيوب وتيك توك وجميع التطبيقات مع فتح نافذة فورية لاختيار فيديو أو صوت وتحديد الجودة",
+    "توحيد الخط الافتراضي وشاشة التحميل مع نفس الهوية البصرية لتطبيق إنجازاتي",
+    "تبسيط واجهة التحميل وإزالة المشتتات وإصلاح محاذاة أزرار اللصق والمسح داخل حقل الرابط",
+    "تحسين مقاس أيقونة التطبيق وتناسق الدائرة الداخلية وتسريع استجابة التشغيل"
   ],
   "features_en": [
-    "Matched the 'Tanzeelati' title font on the Splash screen and top app bar to Injazati's native typography",
-    "Self-contained built-in media engine for Android & Web (YouTube via InnerTube + yt-dlp, TikTok, X, Instagram, and Facebook)",
-    "Native on-device HD video + AAC audio muxing directly inside the app with zero external website redirects",
-    "Real-time download progress, bitrate metrics, and direct saving to the device Downloads folder"
+    "Android Share Sheet integration: share links from YouTube or any social app directly to Tanzeelati and pick Video/Audio & quality immediately",
+    "Unified default system font across both the Splash screen and app UI to match Injazati's visual identity",
+    "Distraction-free download UI layout with proper RTL/LTR URL paste & clear button alignment",
+    "Refined app launcher icon sizing and faster server startup reliability"
   ],
   "apkUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest/download/Tanzeelati-Debug.apk",
   "releaseUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest"

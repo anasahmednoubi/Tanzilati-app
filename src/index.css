@@ -94,8 +94,8 @@
   max-width: 560px;
   padding: 16px 16px calc(24px + env(safe-area-inset-bottom, 0px));
   box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.25);
-  animation: slideUp 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
-  max-height: 85vh;
+  animation: slideUp 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+  max-height: 88vh;
   overflow-y: auto;
 }
 
@@ -108,42 +108,44 @@
   cursor: grab;
 }
 
-.clip-chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--accbg);
-  color: var(--acc);
-  border-radius: 999px;
+.sheet-close {
+  min-height: 40px;
+  padding: 6px 14px;
   font-size: 13px;
   font-weight: 600;
-  margin-bottom: 12px;
-  cursor: pointer;
-  transition: transform 0.15s, opacity 0.2s;
+  flex: none;
 }
 
-.clip-chip:active {
-  transform: scale(0.97);
+.sheet-meta-kicker {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--acc);
+  line-height: 1.3;
+  margin-bottom: 2px;
 }
 
 .q-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 8px;
-  margin: 12px 0;
+  margin: 10px 0 0;
 }
 
 .q-opt {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 58px;
   padding: 10px 12px;
   background: var(--bg);
+  color: var(--text);
   border: 1.5px solid var(--line);
   border-radius: 14px;
   cursor: pointer;
   text-align: start;
-  transition: border-color 0.2s, background-color 0.2s;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.18s, background-color 0.18s, transform 0.12s;
 }
 
 .q-opt.on {
@@ -152,14 +154,23 @@
 }
 
 .q-opt b {
-  font-size: 14px;
+  font-size: 13.5px;
+  font-weight: 700;
   color: var(--text);
+  line-height: 1.3;
 }
 
 .q-opt span {
   font-size: 12px;
   color: var(--mute);
-  margin-top: 2px;
+  margin-top: 3px;
+  line-height: 1.3;
+}
+
+.q-opt .q-size {
+  font-weight: 700;
+  color: var(--acc);
+  margin-top: 4px;
 }
 
 /* Touch dots indicator */

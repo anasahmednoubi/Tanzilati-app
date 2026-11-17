@@ -2,6 +2,7 @@ package com.tanzeelati.app;
 
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.content.Intent;
 import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
@@ -58,8 +59,90 @@ public class TanzeelatiMediaPlugin extends Plugin {
     private static final String MOBILE_CHROME_UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
 
+    private static volatile TanzeelatiMediaPlugin activeInstance;
+    private static volatile String pendingSharedUrl = null;
+    private static volatile String pendingSharedSubject = null;
+
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final ConcurrentHashMap<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
+
+    @Override
+    public void load() {
+        super.load();
+        activeInstance = this;
+    }
+
+    public static void handleSharedIntent(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (!Intent.ACTION_SEND.equals(action)) return;
+
+        String rawText = intent.getStringExtra(Intent.EXTRA_TEXT);
+        if (rawText == null || rawText.trim().isEmpty()) {
+            CharSequence cs = intent.getCharSequenceExtra(Intent.EXTRA_TEXT);
+            if (cs != null) rawText = cs.toString();
+        }
+        String subject = intent.getStringExtra(Intent.EXTRA_SUBJECT);
+        if (subject == null) {
+            subject = intent.getStringExtra(Intent.EXTRA_TITLE);
+        }
+
+        String foundUrl = extractUrlIfPresent(rawText);
+        if (foundUrl == null || foundUrl.isEmpty()) return;
+
+        pendingSharedUrl = foundUrl;
+        pendingSharedSubject = subject != null ? subject.trim() : "";
+
+        // Clear extras so orientation changes do not replay this share intent
+        intent.removeExtra(Intent.EXTRA_TEXT);
+        intent.setAction("");
+
+        TanzeelatiMediaPlugin inst = activeInstance;
+        if (inst != null) {
+            JSObject data = new JSObject();
+            data.put("url", pendingSharedUrl);
+            data.put("subject", pendingSharedSubject);
+            inst.notifyListeners("sharedLinkReceived", data, true);
+        }
+    }
+
+    private static String extractUrlIfPresent(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return null;
+        Matcher m = Pattern.compile("(https?://[^\\s<>\"'{}|\\\\^`]+)", Pattern.CASE_INSENSITIVE).matcher(raw.trim());
+        if (m.find()) {
+            return m.group(1).replaceAll("[.,;:!?)]+$", "");
+        }
+        Matcher dom = Pattern.compile(
+            "((?:www\\.)?(?:youtube\\.com|youtu\\.be|tiktok\\.com|instagram\\.com|facebook\\.com|fb\\.watch|twitter\\.com|x\\.com|soundcloud\\.com|vimeo\\.com)/[^\\s<>\"'{}|\\\\^`]+)",
+            Pattern.CASE_INSENSITIVE
+        ).matcher(raw.trim());
+        if (dom.find()) {
+            return "https://" + dom.group(1).replaceAll("[.,;:!?)]+$", "");
+        }
+        return null;
+    }
+
+    @PluginMethod
+    public void getPendingSharedUrl(PluginCall call) {
+        String url = pendingSharedUrl;
+        String subject = pendingSharedSubject;
+        pendingSharedUrl = null;
+        pendingSharedSubject = null;
+
+        JSObject res = new JSObject();
+        res.put("url", url != null ? url : "");
+        res.put("subject", subject != null ? subject : "");
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void clearPendingSharedUrl(PluginCall call) {
+        pendingSharedUrl = null;
+        pendingSharedSubject = null;
+        JSObject res = new JSObject();
+        res.put("ok", true);
+        call.resolve(res);
+    }
 
     @PluginMethod
     public void resolveMedia(PluginCall call) {

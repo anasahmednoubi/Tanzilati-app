@@ -1,0 +1,108 @@
+{
+  "entities": {
+    "UserPrivateProfile": {
+      "title": "UserPrivateProfile",
+      "description": "Private Google-authenticated user profile isolated under users/{userId}/private/info.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Authentication UID matching the path userId."
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Google account display name."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254,
+          "description": "Verified Google account email address."
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Google profile avatar URL."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest sync/sign-in."
+        }
+      },
+      "required": ["uid", "updatedAt"]
+    },
+    "DownloadHistoryItem": {
+      "title": "DownloadHistoryItem",
+      "description": "A downloaded media record synced to the user's Google account across devices.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique download entry ID matching document ID."
+        },
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "Saved file name shown in download history."
+        },
+        "enName": {
+          "type": "string",
+          "maxLength": 160,
+          "description": "Optional English label for localized display."
+        },
+        "isAudio": {
+          "type": "boolean",
+          "description": "True if the saved file is audio-only."
+        },
+        "sourceUrl": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Original media page URL."
+        },
+        "platform": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Source platform name."
+        },
+        "sizeText": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Real formatted file size string."
+        },
+        "createdAtMs": {
+          "type": "number",
+          "description": "Client creation epoch milliseconds for stable cross-device ordering."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server timestamp verified on creation."
+        }
+      },
+      "required": ["id", "uid", "name", "isAudio", "createdAtMs", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateProfile" },
+      "description": "PII-isolated private user profile stored strictly at docId 'info' and readable/writable only by the verified owner."
+    },
+    "/users/{userId}/downloads/{downloadId}": {
+      "schema": { "$ref": "#/entities/DownloadHistoryItem" },
+      "description": "Synced download history entries owned by {userId}, protected by UID equality and strict field validation."
+    }
+  }
+}

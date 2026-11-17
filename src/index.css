@@ -1060,35 +1060,39 @@ button.ghost {
   line-height: 1.45;
 }
 
-/* Output File Preview Summary (What will actually be saved) */
+/* Output File Preview Summary (Clean hairline divider inside card, zero nested box clutter) */
 .file-summary {
-  margin-top: 12px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: var(--bg);
-  border: 1px solid var(--line);
+  margin-top: 14px;
+  padding: 13px 2px 2px;
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
 }
 
 .file-summary-title {
-  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--acc);
+  margin-bottom: 1px;
 }
 
 .file-summary-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
   font-size: 13.5px;
+  line-height: 1.4;
 }
 
 .file-summary-row .k {
   color: var(--mute);
   flex: none;
+  font-size: 13px;
 }
 
 .file-summary-row .v {
@@ -1106,6 +1110,7 @@ button.ghost {
   color: var(--acc);
   font-weight: 700;
   direction: ltr;
+  flex: none;
 }
 
 .mt {
@@ -1167,6 +1172,7 @@ button.ghost {
 
 .dd-btn {
   width: 100%;
+  min-height: 48px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1174,7 +1180,7 @@ button.ghost {
   background: transparent;
   color: var(--text);
   border-radius: 0;
-  padding: 13px 16px;
+  padding: 11px 14px;
   text-align: start;
 }
 
@@ -1223,9 +1229,19 @@ button.ghost {
   gap: 10px;
 }
 
+.dd-btn-val > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
 .dd-btn-val .dd-size,
 .dd-list li .dd-size {
   flex: none;
+  white-space: nowrap;
   color: var(--acc);
   font-size: 13px;
   font-weight: 700;
@@ -1320,20 +1336,20 @@ button.ghost {
 }
 
 .bar {
-  height: 20px;
+  height: 10px;
   background: var(--track);
   border-radius: 99px;
   overflow: hidden;
-  margin: 10px 0 6px;
+  margin: 10px 0 8px;
 }
 
 .fill {
   height: 100%;
   width: 0;
-  background: var(--acc);
+  background: linear-gradient(90deg, var(--acc), color-mix(in srgb, var(--acc) 78%, #fff));
   border-radius: 99px;
   position: relative;
-  transition: width 0.2s linear;
+  transition: width 0.22s linear;
 }
 
 .fill::after {
@@ -1346,9 +1362,9 @@ button.ghost {
   background: linear-gradient(
     100deg,
     transparent 0,
-    rgba(255, 255, 255, 0.28) 25%,
+    rgba(255, 255, 255, 0.32) 25%,
     transparent 50%,
-    rgba(255, 255, 255, 0.16) 75%,
+    rgba(255, 255, 255, 0.18) 75%,
     transparent 100%
   );
   background-size: 200% 100%;
@@ -1372,34 +1388,140 @@ button.ghost {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  gap: 8px;
 }
 
 .top b {
-  font-size: 22px;
+  font-size: 20px;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
 
 .meta {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   color: var(--mute);
-  font-size: 14px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
 .result {
   background: var(--accbg);
+  color: var(--text);
   border-radius: 12px;
-  padding: 12px;
+  padding: 11px 14px;
   margin-top: 12px;
-  font-weight: 600;
-  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
   display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .result.show {
-  display: block;
+  display: flex;
   animation: pop 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Active Downloading Media Card (Thumbnail beside live progress bar) */
+.dl-media-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dl-thumb {
+  position: relative;
+  width: 84px;
+  height: 56px;
+  border-radius: 12px;
+  overflow: hidden;
+  flex: none;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--acc) 22%, var(--bg)), var(--track));
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dl-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.dl-thumb-badge {
+  position: absolute;
+  bottom: 4px;
+  inset-inline-end: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: rgba(15, 14, 22, 0.78);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+}
+
+.dl-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.dl-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dl-submeta {
+  font-size: 12.5px;
+  color: var(--mute);
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hist-thumb {
+  width: 52px;
+  height: 38px;
+  border-radius: 10px;
+  overflow: hidden;
+  flex: none;
+  background: var(--accbg);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+}
+
+.hist-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.dl-live-card {
+  margin-bottom: 14px;
+  border-color: color-mix(in srgb, var(--acc) 35%, var(--line));
+}
+
+.dl-live-cancel {
+  flex: none;
+  min-height: 34px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 999px;
 }
 
 @keyframes pop {

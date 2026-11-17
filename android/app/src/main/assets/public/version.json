@@ -1,27 +1,27 @@
 {
-  "version": "1.2.4",
-  "build": 7,
+  "version": "1.2.5",
+  "build": 8,
   "date": "2026-11-17",
-  "title": "أحجام حقيقية للملفات + معاينة تشغيل الفيديو قبل التحميل",
-  "title_ar": "أحجام حقيقية للملفات + معاينة تشغيل الفيديو قبل التحميل",
-  "title_en": "Real File Sizes + Live Video & Output Preview",
+  "title": "مزامنة جوجل + تصميم احترافي للتنزيلات بمكتبة إيموجي متناسقة",
+  "title_ar": "مزامنة جوجل + تصميم احترافي للتنزيلات بمكتبة إيموجي متناسقة",
+  "title_en": "Google Sync + Refined Download Progress & Vector Emoji Library",
   "features": [
-    "حساب وعرض الحجم الفعلي الحقيقي للفيديو والصوت لكل جودة قبل التنزيل بدون أي أرقام تقديرية وهمية",
-    "مشغّل معاينة حقيقي للفيديو داخل التطبيق لتتأكد بنفسك أنه الفيديو المطلوب قبل تحميل الفيديو أو استخراج الصوت",
-    "ملخص معاينة فوري لما سيُحفظ على جهازك يوضح اسم الملف الدقيق والصيغة والحجم الفعلي لكل اختيار",
-    "تكامل كامل مع المشاركة المباشرة من يوتيوب والتطبيقات لاختيار الفيديو أو الصوت والجودة فوراً"
+    "تسجيل دخول حقيقي بحساب جوجل مع مزامنة فورية وتلقائية لسجل التنزيلات السابقة والجديدة عبر جميع أجهزتك",
+    "عرض مصغّرة الفيديو الجاري تحميله بجانب شريط التقدم المباشر في شاشة التحميل وتبويب السجل والتنزيلات بشكل احترافي",
+    "تحسين واجهة اختيار الجودة ومعاينة الملف بسطر واحد واضح ومكتبة إيموجي متجهية متناسقة مع هوية إنجازاتي البصرية",
+    "حساب وعرض الحجم الفعلي الحقيقي للفيديو والصوت لكل جودة قبل التنزيل ومعاينة تشغيل الفيديو قبل الحفظ"
   ],
   "features_ar": [
-    "حساب وعرض الحجم الفعلي الحقيقي للفيديو والصوت لكل جودة قبل التنزيل بدون أي أرقام تقديرية وهمية",
-    "مشغّل معاينة حقيقي للفيديو داخل التطبيق لتتأكد بنفسك أنه الفيديو المطلوب قبل تحميل الفيديو أو استخراج الصوت",
-    "ملخص معاينة فوري لما سيُحفظ على جهازك يوضح اسم الملف الدقيق والصيغة والحجم الفعلي لكل اختيار",
-    "تكامل كامل مع المشاركة المباشرة من يوتيوب والتطبيقات لاختيار الفيديو أو الصوت والجودة فوراً"
+    "تسجيل دخول حقيقي بحساب جوجل مع مزامنة فورية وتلقائية لسجل التنزيلات السابقة والجديدة عبر جميع أجهزتك",
+    "عرض مصغّرة الفيديو الجاري تحميله بجانب شريط التقدم المباشر في شاشة التحميل وتبويب السجل والتنزيلات بشكل احترافي",
+    "تحسين واجهة اختيار الجودة ومعاينة الملف بسطر واحد واضح ومكتبة إيموجي متجهية متناسقة مع هوية إنجازاتي البصرية",
+    "حساب وعرض الحجم الفعلي الحقيقي للفيديو والصوت لكل جودة قبل التنزيل ومعاينة تشغيل الفيديو قبل الحفظ"
   ],
   "features_en": [
-    "Real exact byte sizes probed for every Video and Audio quality option instead of placeholder estimates",
-    "Interactive in-app video preview player (with automatic embed fallback) so you can watch and verify the exact source video before downloading",
-    "Live saved-to-device output preview showing the exact filename, extension, format, and real file size for your selection",
-    "Seamless Share Sheet integration from YouTube and social apps with immediate format & quality confirmation"
+    "Real Google Sign-In with automatic real-time cloud sync for previous and new download history across devices",
+    "Active downloading video thumbnail & live progress bar displayed cleanly in both the Download view and Downloads/History tab",
+    "Refined single-line quality picker, clean RTL filename formatting, and a unified vector emoji library matching Injazati's visual identity",
+    "Real exact byte sizes probed for every Video and Audio quality option with live playable source video preview"
   ],
   "apkUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest/download/Tanzeelati-Debug.apk",
   "releaseUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest"

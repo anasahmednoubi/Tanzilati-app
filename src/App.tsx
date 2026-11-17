@@ -2,6 +2,20 @@ import React, { useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Clipboard } from '@capacitor/clipboard';
+import type { User } from 'firebase/auth';
+import {
+  subscribeAuthState,
+  signInWithGoogle,
+  signOutGoogle,
+  syncUserProfile,
+  uploadDownloadItems,
+  subscribeUserDownloads,
+  deleteAllUserDownloads,
+  eraseAllCloudUserData,
+  sanitizeDownloadId,
+  type CloudDownloadInput,
+} from './firebase';
+import { EmojiIcon } from './components/EmojiIcon';
 import {
   AppLang,
   OPTIONS_I18N,
@@ -97,7 +111,18 @@ const ONE = new Set([
 ]);
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const EMAIL_RE = /^\S+@\S+\.\S+$/;
+
+const inferPlatformLabel = (rawUrl: string): string => {
+  const lower = rawUrl.toLowerCase();
+  if (lower.includes('tiktok.com')) return 'TikTok';
+  if (lower.includes('instagram.com')) return 'Instagram';
+  if (lower.includes('twitter.com') || lower.includes('x.com')) return 'X';
+  if (lower.includes('youtube.com') || lower.includes('youtu.be')) return 'YouTube';
+  if (lower.includes('facebook.com') || lower.includes('fb.watch')) return 'Facebook';
+  if (lower.includes('soundcloud')) return 'SoundCloud';
+  if (lower.includes('vimeo.com')) return 'Vimeo';
+  return 'Web';
+};
 
 interface HistoryEntry {
   id: string;
@@ -105,10 +130,65 @@ interface HistoryEntry {
   enName?: string;
   a: boolean;
   fresh?: boolean;
+  sourceUrl?: string;
+  platform?: string;
+  sizeText?: string;
+  thumb?: string;
+  createdAtMs?: number;
+  synced?: boolean;
 }
 
-const APP_VERSION = '1.2.4';
-const APP_BUILD = 7;
+interface ActiveDownloadMeta {
+  title: string;
+  thumbnail?: string;
+  platform?: string;
+  qualityLabel: string;
+  sizeText?: string;
+  isAudio: boolean;
+  filename?: string;
+}
+
+const renderFileName = (rawName: string) => {
+  const idx = rawName.lastIndexOf('.');
+  if (idx <= 0 || idx === rawName.length - 1) {
+    return (
+      <span dir="auto" style={{ unicodeBidi: 'plaintext' }}>
+        {rawName}
+      </span>
+    );
+  }
+  const stem = rawName.slice(0, idx);
+  const ext = rawName.slice(idx);
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', maxWidth: '100%', minWidth: 0 }}>
+      <span
+        dir="auto"
+        style={{
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          minWidth: 0,
+        }}
+      >
+        {stem}
+      </span>
+      <span
+        dir="ltr"
+        style={{
+          flexShrink: 0,
+          opacity: 0.72,
+          fontSize: '0.9em',
+          fontWeight: 500,
+        }}
+      >
+        {ext}
+      </span>
+    </span>
+  );
+};
+
+const APP_VERSION = '1.2.5';
+const APP_BUILD = 8;
 const GITHUB_REPO = 'anasahmednoubi/Tanzilati-app';
 
 const compareSemver = (a: string, b: string): number => {
@@ -820,6 +900,7 @@ export default function App() {
   const [speedVal, setSpeedVal] = useState<string | null>(null);
   const [etaSec, setEtaSec] = useState<number | null>(null);
   const [showRes, setShowRes] = useState(false);
+  const [activeDlMeta, setActiveDlMeta] = useState<ActiveDownloadMeta | null>(null);
   const timerRef = useRef<number | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
 
@@ -879,21 +960,158 @@ export default function App() {
   const [devNotifMsg, setDevNotifMsg] = useState('');
   const [tourStep, setTourStep] = useState<number>(-1);
 
-  // Account & Sync
-  const [account, setAccount] = useState<{ g?: string; n?: string; m?: 'g' | 'e' }>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('link-v1') || '{}') || {};
-    } catch {
-      return {};
-    }
-  });
-  const [authMode, setAuthMode] = useState<'in' | 'up'>('in');
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authName, setAuthName] = useState('');
+  // Firebase Google Account & Cloud History Sync
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [isSigningInGoogle, setIsSigningInGoogle] = useState(false);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [authError, setAuthError] = useState('');
-  const [authInfo, setAuthInfo] = useState('');
-  const [toastMsg, setToastMsg] = useState<{ title: string; body: string; icon?: 'check' | 'bell' } | null>(null);
+  const [toastMsg, setToastMsg] = useState<{ title: string; body: string; icon?: 'check' | 'bell' | 'clipboard' } | null>(null);
+
+  const historyRef = useRef<HistoryEntry[]>(history);
+  historyRef.current = history;
+  const firebaseUserRef = useRef<User | null>(firebaseUser);
+  firebaseUserRef.current = firebaseUser;
+  const cloudIdsRef = useRef<Set<string>>(new Set());
+  const hasMergedLocalOnLoginRef = useRef<boolean>(false);
+
+  const toCloudDownload = (entry: HistoryEntry): CloudDownloadInput => ({
+    id: sanitizeDownloadId(entry.id),
+    name: entry.n,
+    enName: entry.enName,
+    isAudio: entry.a,
+    sourceUrl: entry.sourceUrl,
+    platform: entry.platform,
+    sizeText: entry.sizeText,
+    createdAtMs: entry.createdAtMs || Date.now(),
+  });
+
+  const recordNewHistoryEntry = (entry: HistoryEntry) => {
+    const activeUser = firebaseUserRef.current;
+    const normalized: HistoryEntry = {
+      ...entry,
+      createdAtMs: entry.createdAtMs || Date.now(),
+      synced: Boolean(activeUser),
+    };
+    setHistory((prev) => [normalized, ...prev]);
+
+    if (activeUser && activeUser.emailVerified !== false) {
+      setIsSyncingCloud(true);
+      uploadDownloadItems(activeUser.uid, [toCloudDownload(normalized)], cloudIdsRef.current)
+        .then(() => {
+          setLastSyncedAt(Date.now());
+        })
+        .catch(() => {
+          const curT = UI_TEXT[langRef.current];
+          triggerToast(curT.syncToastTitle, curT.syncErrorBody, 'bell');
+        })
+        .finally(() => {
+          setIsSyncingCloud(false);
+        });
+    }
+  };
+
+  useEffect(() => {
+    let unsubDownloads: (() => void) | null = null;
+
+    const unsubAuth = subscribeAuthState((user) => {
+      if (unsubDownloads) {
+        unsubDownloads();
+        unsubDownloads = null;
+      }
+
+      setFirebaseUser(user);
+      hasMergedLocalOnLoginRef.current = false;
+
+      if (!user) {
+        cloudIdsRef.current = new Set();
+        setLastSyncedAt(null);
+        setIsSyncingCloud(false);
+        return;
+      }
+
+      setAuthError('');
+      setIsSyncingCloud(true);
+
+      // Sync verified Google profile to isolated /users/{uid}/private/info
+      void syncUserProfile(user).catch(() => {});
+
+      unsubDownloads = subscribeUserDownloads(
+        user.uid,
+        (cloudRecords) => {
+          const cloudIds = new Set(cloudRecords.map((r) => r.id));
+          cloudIdsRef.current = cloudIds;
+
+          const existingLocal = historyRef.current;
+          if (!hasMergedLocalOnLoginRef.current) {
+            hasMergedLocalOnLoginRef.current = true;
+            const localToUpload = existingLocal
+              .filter((item) => !cloudIds.has(sanitizeDownloadId(item.id)))
+              .map((item) => toCloudDownload(item));
+
+            if (localToUpload.length > 0) {
+              void uploadDownloadItems(user.uid, localToUpload, cloudIds)
+                .then(() => {
+                  setLastSyncedAt(Date.now());
+                })
+                .catch(() => {})
+                .finally(() => {
+                  setIsSyncingCloud(false);
+                });
+            } else {
+              setLastSyncedAt(Date.now());
+              setIsSyncingCloud(false);
+            }
+          } else {
+            setLastSyncedAt(Date.now());
+            setIsSyncingCloud(false);
+          }
+
+          const freshIds = new Set(
+            existingLocal.filter((h) => h.fresh).map((h) => sanitizeDownloadId(h.id))
+          );
+          const localThumbById = new Map<string, string>();
+          for (const h of existingLocal) {
+            if (h.thumb) localThumbById.set(sanitizeDownloadId(h.id), h.thumb);
+          }
+
+          const cloudMapped: HistoryEntry[] = cloudRecords.map((r) => ({
+            id: r.id,
+            n: r.name,
+            enName: r.enName,
+            a: r.isAudio,
+            fresh: freshIds.has(r.id),
+            sourceUrl: r.sourceUrl,
+            platform: r.platform,
+            sizeText: r.sizeText,
+            thumb: localThumbById.get(r.id),
+            createdAtMs: r.createdAtMs,
+            synced: true,
+          }));
+
+          const pendingLocals = existingLocal
+            .filter((item) => !cloudIds.has(sanitizeDownloadId(item.id)))
+            .map((item) => ({
+              ...item,
+              createdAtMs: item.createdAtMs || Date.now(),
+            }));
+
+          const merged = [...pendingLocals, ...cloudMapped].sort(
+            (a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0)
+          );
+          setHistory(merged);
+        },
+        () => {
+          setIsSyncingCloud(false);
+        }
+      );
+    });
+
+    return () => {
+      if (unsubDownloads) unsubDownloads();
+      unsubAuth();
+    };
+  }, []);
 
   // --- Clipboard & Share Sheet Catcher State ---
   const [caughtVideo, setCaughtVideo] = useState<CaughtVideoInfo | null>(null);
@@ -1354,7 +1572,8 @@ export default function App() {
           openCaughtWithRealInfo(extracted, 'clipboard');
           triggerToast(
             curT.linkDetectedToast,
-            curT.linkCaptured(extracted.replace(/^https?:\/\/(www\.)?/, '').slice(0, 24))
+            curT.linkCaptured(extracted.replace(/^https?:\/\/(www\.)?/, '').slice(0, 24)),
+            'clipboard'
           );
         } else if (!silent) {
           setUrl(extracted);
@@ -1742,6 +1961,20 @@ export default function App() {
     }
 
     try {
+      const curLang = langRef.current;
+      const optLabel =
+        (curLang === 'ar' ? selectedOption?.labelAr : selectedOption?.labelEn) ||
+        OPTIONS_I18N[curLang][isAudio ? 'audio' : 'video'].find((o) => o[0] === formatKey)?.[1] ||
+        formatKey;
+      setActiveDlMeta({
+        title,
+        thumbnail: meta?.thumbnail,
+        platform: inferPlatformLabel(cleanTarget),
+        qualityLabel: optLabel,
+        sizeText: selectedOption?.sizeText && selectedOption.sizeText !== '—' ? selectedOption.sizeText : undefined,
+        isAudio,
+        filename,
+      });
       setShowRes(false);
       setProgress(5);
       setSpeedVal(null);
@@ -1815,8 +2048,13 @@ export default function App() {
         n: filename,
         a: isAudio,
         fresh: true,
+        sourceUrl: cleanTarget,
+        platform: inferPlatformLabel(cleanTarget),
+        sizeText: selectedOption?.sizeText && selectedOption.sizeText !== '—' ? selectedOption.sizeText : undefined,
+        thumb: meta?.thumbnail,
+        createdAtMs: Date.now(),
       };
-      setHistory((prev) => [newEntry, ...prev]);
+      recordNewHistoryEntry(newEntry);
       triggerToast(curT.completedToastTitle, curT.completedToastBody(filename.slice(0, 28)));
     } catch {
       activeJobIdRef.current = null;
@@ -1850,6 +2088,25 @@ export default function App() {
       timerRef.current = null;
     }
     const cleanTarget = extractUrlFromText(targetUrl) || targetUrl.trim();
+    const initialMeta = overrideMeta || customVideoMeta;
+    const initialOptList = isAudio ? initialMeta?.audioOptions : initialMeta?.videoOptions;
+    const initialOpt = initialOptList?.find((o) => o.key === formatKey) || initialOptList?.[0];
+    const curLangNow = langRef.current;
+    const fallbackQualLabel =
+      (curLangNow === 'ar' ? initialOpt?.labelAr : initialOpt?.labelEn) ||
+      OPTIONS_I18N[curLangNow][isAudio ? 'audio' : 'video'].find((o) => o[0] === formatKey)?.[1] ||
+      formatKey;
+    setActiveDlMeta({
+      title: initialMeta?.title || (isAudio ? UI_TEXT[curLangNow].audioTab : UI_TEXT[curLangNow].videoTab),
+      thumbnail: initialMeta?.thumbnail,
+      platform: inferPlatformLabel(cleanTarget),
+      qualityLabel: fallbackQualLabel,
+      sizeText: initialOpt?.sizeText && initialOpt.sizeText !== '—' ? initialOpt.sizeText : undefined,
+      isAudio,
+      filename: initialMeta
+        ? buildPredictedFilename(initialMeta.title, isAudio, formatKey, initialOpt?.directUrl)
+        : undefined,
+    });
     setShowRes(false);
     setProgress(2);
     setSpeedVal(null);
@@ -1935,8 +2192,13 @@ export default function App() {
           n: entryName,
           a: isAudio,
           fresh: true,
+          sourceUrl: cleanTarget,
+          platform: inferPlatformLabel(cleanTarget),
+          sizeText: chosen?.sizeText && chosen.sizeText !== '—' ? chosen.sizeText : undefined,
+          thumb: meta?.thumbnail,
+          createdAtMs: Date.now(),
         };
-        setHistory((prev) => [newEntry, ...prev]);
+        recordNewHistoryEntry(newEntry);
         triggerToast(curT.completedToastTitle, curT.completedToastBody(entryName.slice(0, 28)));
         return;
       } catch (err: any) {
@@ -2014,13 +2276,32 @@ export default function App() {
 
             const curT = UI_TEXT[langRef.current];
             const entryName = st.filename || filename || `${title}.mp4`;
+            const activeMetaObj = overrideMeta || customVideoMeta;
+            const activeOptList = isAudio
+              ? activeMetaObj?.audioOptions
+              : activeMetaObj?.videoOptions;
+            const matchedOpt = activeOptList?.find((o) => o.key === formatKey) || activeOptList?.[0];
+            setActiveDlMeta((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    title: activeMetaObj?.title || title || prev.title,
+                    filename: entryName,
+                  }
+                : prev
+            );
             const newEntry: HistoryEntry = {
               id: uid(),
               n: entryName,
               a: isAudio,
               fresh: true,
+              sourceUrl: cleanTarget,
+              platform: inferPlatformLabel(cleanTarget),
+              sizeText: matchedOpt?.sizeText && matchedOpt.sizeText !== '—' ? matchedOpt.sizeText : undefined,
+              thumb: activeMetaObj?.thumbnail,
+              createdAtMs: Date.now(),
             };
-            setHistory((prev) => [newEntry, ...prev]);
+            recordNewHistoryEntry(newEntry);
             triggerToast(curT.completedToastTitle, curT.completedToastBody(entryName.slice(0, 28)));
           } else if (st.status === 'error' || st.status === 'cancelled') {
             if (timerRef.current) {
@@ -2125,7 +2406,7 @@ export default function App() {
     switchTab('D');
   };
 
-  const triggerToast = (title: string, body: string, icon: 'check' | 'bell' = 'check') => {
+  const triggerToast = (title: string, body: string, icon: 'check' | 'bell' | 'clipboard' = 'check') => {
     setToastMsg({ title, body, icon });
     setTimeout(() => {
       setToastMsg((prev) => (prev?.title === title ? null : prev));
@@ -2222,53 +2503,67 @@ export default function App() {
     setLang(nextLang);
   };
 
-  // Account handlers
-  const handleAuthSubmit = () => {
-    const e = authEmail.trim();
-    setAuthInfo('');
-    if (!EMAIL_RE.test(e)) {
-      setAuthError(t.invalidEmail);
-      return;
-    }
-    if (authPassword.length < 6) {
-      setAuthError(t.shortPassword);
-      return;
-    }
-    const accObj = {
-      g: e,
-      n: authMode === 'up' ? authName.trim() : '',
-      m: 'e' as const,
-    };
-    setAccount(accObj);
-    try {
-      localStorage.setItem('link-v1', JSON.stringify(accObj));
-    } catch {}
-    setAuthPassword('');
+  // Firebase Google Account handlers
+  const handleGoogleAuth = async () => {
+    if (isSigningInGoogle) return;
     setAuthError('');
-    setAuthInfo('');
-    triggerToast(t.accountToastTitle, authMode === 'up' ? t.accountCreated : t.signedIn);
-  };
-
-  const handleGoogleAuth = () => {
-    const accObj = { g: 'Google User', n: t.googleUser, m: 'g' as const };
-    setAccount(accObj);
+    setIsSigningInGoogle(true);
     try {
-      localStorage.setItem('link-v1', JSON.stringify(accObj));
-    } catch {}
-    triggerToast(t.accountToastTitle, t.googleLinked);
+      await signInWithGoogle();
+      triggerToast(t.accountToastTitle, t.googleLinked);
+    } catch (err: any) {
+      const code = typeof err?.code === 'string' ? err.code : '';
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        setAuthError(t.googleAuthCancelled);
+      } else if (code === 'auth/popup-blocked') {
+        setAuthError(t.googleAuthBlocked);
+      } else {
+        setAuthError(t.googleAuthFailed);
+      }
+    } finally {
+      setIsSigningInGoogle(false);
+    }
   };
 
-  const handleUnlink = () => {
-    setAccount({});
+  const handleSyncNow = async () => {
+    if (!firebaseUser || isSyncingCloud) return;
+    setIsSyncingCloud(true);
     try {
-      localStorage.removeItem('link-v1');
-    } catch {}
-    triggerToast(t.accountToastTitle, t.signOutToast);
+      await syncUserProfile(firebaseUser);
+      const pending = historyRef.current
+        .filter((h) => !cloudIdsRef.current.has(sanitizeDownloadId(h.id)))
+        .map((h) => toCloudDownload(h));
+      if (pending.length > 0) {
+        await uploadDownloadItems(firebaseUser.uid, pending, cloudIdsRef.current);
+      }
+      setLastSyncedAt(Date.now());
+      triggerToast(t.syncToastTitle, t.syncToastBody);
+    } catch {
+      triggerToast(t.syncToastTitle, t.syncErrorBody, 'bell');
+    } finally {
+      setIsSyncingCloud(false);
+    }
   };
 
-  const isLinked = Boolean(account.g);
+  const handleUnlink = async () => {
+    try {
+      await signOutGoogle();
+      try {
+        localStorage.removeItem('link-v1');
+      } catch {}
+      triggerToast(t.accountToastTitle, t.signOutToast);
+    } catch {
+      triggerToast(t.accountToastTitle, t.syncErrorBody, 'bell');
+    }
+  };
+
+  const isLinked = Boolean(firebaseUser);
+  const linkedEmail = firebaseUser?.email || '';
+  const linkedPhoto = firebaseUser?.photoURL || '';
   const linkedDisplayName =
-    account.n || (account.g && account.g.includes('@') ? account.g.split('@')[0] : account.g) || '';
+    firebaseUser?.displayName ||
+    (linkedEmail && linkedEmail.includes('@') ? linkedEmail.split('@')[0] : linkedEmail) ||
+    '';
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -2650,11 +2945,14 @@ export default function App() {
 
               return (
                 <div className="file-summary" aria-label={t.outputPreviewTitle}>
-                  <div className="file-summary-title">{t.outputPreviewTitle}</div>
+                  <div className="file-summary-title">
+                    <EmojiIcon name={mode === 'audio' ? 'music' : 'video'} size={16} />
+                    <span>{t.outputPreviewTitle}</span>
+                  </div>
                   <div className="file-summary-row">
                     <span className="k">{t.outputFileNameLabel}</span>
-                    <span className="v" dir="auto" title={predictedName}>
-                      {predictedName}
+                    <span className="v" title={predictedName}>
+                      {renderFileName(predictedName)}
                     </span>
                   </div>
                   <div className="file-summary-row">
@@ -2691,10 +2989,40 @@ export default function App() {
           </button>
 
           {(isDownloading || dlPhase !== 'idle') && (
-            <section className="card" aria-live="polite" style={{ animation: 'pop 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
-              <div className="top">
-                <span id="state">{stateText}</span>
-                <b id="pct">{Math.floor(progress)}%</b>
+            <section className="card dl-live-card" aria-live="polite" style={{ animation: 'pop 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
+              <div className="dl-media-row">
+                <div className="dl-thumb">
+                  {activeDlMeta?.thumbnail ? (
+                    <img
+                      src={activeDlMeta.thumbnail}
+                      alt={activeDlMeta.title}
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <EmojiIcon name={activeDlMeta?.isAudio ? 'music' : 'video'} size={26} />
+                  )}
+                  <span className="dl-thumb-badge">
+                    <EmojiIcon name={activeDlMeta?.isAudio ? 'music' : 'video'} size={13} />
+                  </span>
+                </div>
+                <div className="dl-info">
+                  <div className="top">
+                    <span id="state" style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--acc)' }}>
+                      {stateText}
+                    </span>
+                    <b id="pct">{Math.floor(progress)}%</b>
+                  </div>
+                  <div className="dl-title" dir="auto">
+                    {activeDlMeta?.title || currentVideoTitle}
+                  </div>
+                  {activeDlMeta && (
+                    <div className="dl-submeta">
+                      {[activeDlMeta.platform, activeDlMeta.qualityLabel, activeDlMeta.sizeText]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="bar">
                 <div
@@ -2708,39 +3036,151 @@ export default function App() {
                 <span id="eta">{etaText}</span>
               </div>
               <div className={`result ${showRes ? 'show' : ''}`} id="res">
-                {t.savedResult}
+                <EmojiIcon name="check" size={18} />
+                <span>{t.savedResult}</span>
               </div>
             </section>
           )}
         </div>
 
-        {/* Tab: History (#pS) */}
+        {/* Tab: History / Downloads (#pS) */}
         <div id="pS" className={`${curTab === 'S' ? '' : 'hide'} ${tabDirection}`}>
+          {(isDownloading || (dlPhase !== 'idle' && dlPhase !== 'cancelled' && activeDlMeta)) && (
+            <section className="card dl-live-card" aria-live="polite">
+              <div className="top" style={{ marginBottom: '10px' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '15px', fontWeight: 700 }}>
+                  <EmojiIcon name="download" size={18} />
+                  <span>{t.downloadingNowTitle}</span>
+                </span>
+                <b style={{ fontSize: '16px', color: 'var(--acc)' }}>{Math.floor(progress)}%</b>
+              </div>
+              <div className="dl-media-row">
+                <div className="dl-thumb">
+                  {activeDlMeta?.thumbnail ? (
+                    <img
+                      src={activeDlMeta.thumbnail}
+                      alt={activeDlMeta.title}
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <EmojiIcon name={activeDlMeta?.isAudio ? 'music' : 'video'} size={24} />
+                  )}
+                  <span className="dl-thumb-badge">
+                    <EmojiIcon name={activeDlMeta?.isAudio ? 'music' : 'video'} size={13} />
+                  </span>
+                </div>
+                <div className="dl-info">
+                  <div className="dl-title" dir="auto">
+                    {activeDlMeta?.filename || activeDlMeta?.title || currentVideoTitle}
+                  </div>
+                  <div className="dl-submeta">
+                    {[
+                      activeDlMeta?.platform,
+                      activeDlMeta?.sizeText,
+                      speedVal ? `${speedVal} MB/s` : null,
+                      etaSec !== null && etaSec > 0 ? `${etaSec} ${t.secUnit}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || stateText}
+                  </div>
+                  <div className="bar" style={{ margin: '7px 0 0', height: '8px' }}>
+                    <div
+                      className={`fill ${isDownloading ? 'run' : ''}`}
+                      style={{ width: `${progress}%` }}
+                    ></div>
+                  </div>
+                </div>
+                {isDownloading ? (
+                  <button
+                    type="button"
+                    className="ghost dl-live-cancel"
+                    onClick={handleDownloadToggle}
+                  >
+                    {t.cancel}
+                  </button>
+                ) : (
+                  <EmojiIcon name="check" size={20} />
+                )}
+              </div>
+            </section>
+          )}
+
           <section className="card">
-            <b style={{ fontSize: '18px' }}>{t.historyTitle}</b>
-            <div className="sub" style={{ margin: '2px 0 6px' }}>
-              {t.filesCount(history.length)}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', marginBottom: '6px' }}>
+              <div>
+                <b style={{ fontSize: '18px' }}>{t.historyTitle}</b>
+                <div className="sub" style={{ margin: '2px 0 4px' }}>
+                  {t.filesCount(history.length)}
+                </div>
+              </div>
+              {isLinked ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={handleSyncNow}
+                  disabled={isSyncingCloud}
+                  style={{
+                    fontSize: '12.5px',
+                    padding: '6px 12px',
+                    borderRadius: '10px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    color: 'var(--ok)',
+                  }}
+                >
+                  <EmojiIcon name="cloud" size={16} />
+                  <span>{isSyncingCloud ? t.syncing : t.syncedWithGoogle}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    switchTab('H');
+                    setHSub('link');
+                  }}
+                  style={{
+                    fontSize: '12.5px',
+                    padding: '6px 12px',
+                    borderRadius: '10px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    color: 'var(--acc)',
+                  }}
+                >
+                  <span style={{ fontWeight: 700, color: '#4285f4' }}>G</span>
+                  <span>{t.syncHintSignIn}</span>
+                </button>
+              )}
             </div>
             {history.length ? (
               history.map((h, i) => (
                 <div key={h.id} className={`q ${h.fresh && i === 0 ? 'new' : ''}`}>
-                  <div className="n">
-                    <div className="ic" aria-hidden="true">
-                      {h.a ? (
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M9 18V5l12-2v13" />
-                          <circle cx="6" cy="18" r="3" />
-                          <circle cx="18" cy="16" r="3" />
-                        </svg>
+                  <div className="n" style={{ flex: 1, minWidth: 0 }}>
+                    <div className="hist-thumb" aria-hidden="true">
+                      {h.thumb ? (
+                        <img src={h.thumb} alt={h.n} referrerPolicy="no-referrer" />
                       ) : (
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M8 5.5v13l10-6.5-10-6.5z" />
-                        </svg>
+                        <EmojiIcon name={h.a ? 'music' : 'video'} size={20} />
                       )}
                     </div>
-                    <span>{lang === 'en' && h.enName ? h.enName : h.n}</span>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                        {renderFileName(lang === 'en' && h.enName ? h.enName : h.n)}
+                      </div>
+                      {(h.platform || h.sizeText) && (
+                        <div className="sub" style={{ fontSize: '12px', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+                          {[h.platform, h.sizeText].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <span className="s">{t.completedBadge}</span>
+                  <span className="s" style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                    <EmojiIcon name="check" size={15} />
+                    <span>{t.completedBadge}</span>
+                  </span>
                 </div>
               ))
             ) : (
@@ -2998,29 +3438,51 @@ export default function App() {
                 </>
               )}
 
-              {/* Sub-page: Link Account */}
+              {/* Sub-page: Link Google Account */}
               {hSub === 'link' && (
                 <div className="card">
                   {isLinked ? (
                     <>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <span
-                          className="badge"
-                          style={{
-                            width: '44px',
-                            height: '44px',
-                            fontSize: '22px',
-                            background: account.m === 'g' ? '#fff' : 'var(--accbg)',
-                            color: account.m === 'g' ? '#4285f4' : 'var(--acc)',
-                            borderColor: account.m === 'g' ? 'var(--line)' : 'transparent',
-                          }}
-                        >
-                          {account.m === 'g' ? 'G' : Array.from(linkedDisplayName || '?')[0]}
-                        </span>
+                        {linkedPhoto ? (
+                          <img
+                            src={linkedPhoto}
+                            alt={linkedDisplayName || 'Google'}
+                            referrerPolicy="no-referrer"
+                            style={{
+                              width: '44px',
+                              height: '44px',
+                              borderRadius: '50%',
+                              objectFit: 'cover',
+                              border: '1px solid var(--line)',
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="badge"
+                            style={{
+                              width: '44px',
+                              height: '44px',
+                              fontSize: '20px',
+                              background: '#fff',
+                              color: '#4285f4',
+                              borderColor: 'var(--line)',
+                            }}
+                          >
+                            G
+                          </span>
+                        )}
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis' }} dir="auto">
-                            {account.g}
-                          </div>
+                          {linkedDisplayName && (
+                            <div style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis' }} dir="auto">
+                              {linkedDisplayName}
+                            </div>
+                          )}
+                          {linkedEmail && (
+                            <div className="sub" style={{ fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis' }} dir="auto">
+                              {linkedEmail}
+                            </div>
+                          )}
                           <div style={{ color: 'var(--ok)', fontSize: '13px', marginTop: '2px' }}>
                             {t.linked}
                           </div>
@@ -3028,13 +3490,20 @@ export default function App() {
                       </div>
 
                       <div className="sync">
-                        <span className="sub">{t.synced}</span>
+                        <span className="sub">
+                          {isSyncingCloud
+                            ? t.syncing
+                            : lastSyncedAt
+                              ? `${t.synced} (${history.length})`
+                              : t.synced}
+                        </span>
                         <button
                           className="chip"
                           style={{ flex: 'none' }}
-                          onClick={() => triggerToast(t.syncToastTitle, t.syncToastBody)}
+                          onClick={handleSyncNow}
+                          disabled={isSyncingCloud}
                         >
-                          {t.syncNow}
+                          {isSyncingCloud ? t.syncing : t.syncNow}
                         </button>
                       </div>
 
@@ -3051,94 +3520,41 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      <div className="chips">
-                        {[
-                          ['in', t.signIn],
-                          ['up', t.newAccount],
-                        ].map(([modeVal, label]) => (
-                          <button
-                            key={modeVal}
-                            className={`chip ${authMode === modeVal ? 'on' : ''}`}
-                            onClick={() => {
-                              setAuthMode(modeVal as any);
-                              setAuthError('');
-                              setAuthInfo('');
-                            }}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-
-                      {authMode === 'up' && (
-                        <div className="row" style={{ marginTop: '10px' }}>
-                          <input
-                            type="text"
-                            placeholder={t.namePlaceholder}
-                            autoComplete="name"
-                            value={authName}
-                            onChange={(e) => setAuthName(e.target.value)}
-                            style={{ direction: lang === 'ar' ? 'rtl' : 'ltr', textAlign: 'start' }}
-                          />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                        <span
+                          className="badge"
+                          style={{
+                            width: '44px',
+                            height: '44px',
+                            fontSize: '20px',
+                            background: '#fff',
+                            color: '#4285f4',
+                            borderColor: 'var(--line)',
+                          }}
+                        >
+                          G
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <b style={{ display: 'block', fontSize: '15.5px' }}>{t.googleSignInTitle}</b>
                         </div>
-                      )}
-
-                      <div className="row" style={{ marginTop: '10px' }}>
-                        <input
-                          type="email"
-                          placeholder={t.emailPlaceholder}
-                          autoComplete="email"
-                          value={authEmail}
-                          onChange={(e) => setAuthEmail(e.target.value)}
-                        />
                       </div>
 
-                      <div className="row" style={{ marginTop: '10px' }}>
-                        <input
-                          type="password"
-                          placeholder={t.passwordPlaceholder}
-                          autoComplete={authMode === 'up' ? 'new-password' : 'current-password'}
-                          value={authPassword}
-                          onChange={(e) => setAuthPassword(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && handleAuthSubmit()}
-                        />
+                      <div className="sub" style={{ lineHeight: 1.65, marginBottom: '14px' }}>
+                        {t.googleSignInDesc}
                       </div>
 
                       {authError && (
-                        <div className="danger" style={{ fontSize: '13px', marginTop: '8px' }}>
+                        <div className="danger" style={{ fontSize: '13px', marginBottom: '10px' }}>
                           {authError}
                         </div>
                       )}
 
-                      {authInfo && (
-                        <div style={{ color: 'var(--ok)', fontSize: '13px', marginTop: '8px' }}>
-                          {authInfo}
-                        </div>
-                      )}
-
-                      <button style={{ width: '100%', marginTop: '12px' }} onClick={handleAuthSubmit}>
-                        {authMode === 'up' ? t.createAccountBtn : t.signIn}
-                      </button>
-
-                      {authMode === 'in' && (
-                        <button
-                          className="linkbtn"
-                          onClick={() => {
-                            if (!EMAIL_RE.test(authEmail.trim())) {
-                              setAuthError(t.invalidEmail);
-                            } else {
-                              setAuthError('');
-                              setAuthInfo(t.previewResetNote);
-                            }
-                          }}
-                        >
-                          {t.forgotPassword}
-                        </button>
-                      )}
-
-                      <div className="or">{t.or}</div>
-
-                      <button className="ghost gbtn" onClick={handleGoogleAuth}>
+                      <button
+                        type="button"
+                        className="ghost gbtn"
+                        onClick={handleGoogleAuth}
+                        disabled={isSigningInGoogle}
+                      >
                         <span
                           className="badge"
                           style={{
@@ -3151,12 +3567,8 @@ export default function App() {
                         >
                           G
                         </span>
-                        <span>{t.continueWithGoogle}</span>
+                        <span>{isSigningInGoogle ? t.signingInGoogle : t.continueWithGoogle}</span>
                       </button>
-
-                      <div className="sub" style={{ marginTop: '12px' }}>
-                        {t.previewAuthNote}
-                      </div>
                     </>
                   )}
                 </div>
@@ -3167,8 +3579,15 @@ export default function App() {
             <>
               <div className="card">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div className="av">
-                    {linkedDisplayName ? (
+                  <div className="av" style={linkedPhoto ? { padding: 0, overflow: 'hidden' } : undefined}>
+                    {linkedPhoto ? (
+                      <img
+                        src={linkedPhoto}
+                        alt={linkedDisplayName || 'Google'}
+                        referrerPolicy="no-referrer"
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : linkedDisplayName ? (
                       Array.from(linkedDisplayName)[0]
                     ) : (
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -3196,11 +3615,11 @@ export default function App() {
                     )}
                     <div className="sub" style={{ overflowWrap: 'anywhere' }}>
                       {t.accountLabel}
-                      {isLinked ? (
+                      {isLinked && linkedEmail ? (
                         <>
                           :{' '}
                           <span dir="auto" style={{ color: 'var(--text)' }}>
-                            {account.g}
+                            {linkedEmail}
                           </span>
                         </>
                       ) : (
@@ -3342,13 +3761,19 @@ export default function App() {
                     className="ghost danger"
                     id="wipe"
                     style={{ width: '100%' }}
-                    onClick={() => {
+                    onClick={async () => {
                       if (!wipeArm) {
                         setWipeArm(true);
                         setTimeout(() => setWipeArm(false), 3000);
                       } else {
                         setWipeArm(false);
                         setHistory([]);
+                        if (firebaseUser) {
+                          try {
+                            await deleteAllUserDownloads(firebaseUser.uid);
+                            cloudIdsRef.current = new Set();
+                          } catch {}
+                        }
                         triggerToast(t.historyLabel, t.historyCleared);
                       }
                     }}
@@ -3362,12 +3787,18 @@ export default function App() {
                     type="button"
                     className="ghost danger"
                     style={{ width: '100%' }}
-                    onClick={() => {
+                    onClick={async () => {
                       if (!wipeAllArm) {
                         setWipeAllArm(true);
                         setTimeout(() => setWipeAllArm(false), 3000);
                       } else {
                         setWipeAllArm(false);
+                        if (firebaseUser) {
+                          try {
+                            await eraseAllCloudUserData(firebaseUser.uid);
+                            await signOutGoogle();
+                          } catch {}
+                        }
                         try {
                           [
                             'tanzeelati-theme',
@@ -3555,7 +3986,22 @@ export default function App() {
             role="tab"
             aria-selected={curTab === 'S'}
             onClick={() => switchTab('S')}
+            style={{ position: 'relative' }}
           >
+            {isDownloading && (
+              <span
+                style={{
+                  position: 'absolute',
+                  top: '7px',
+                  insetInlineEnd: '10px',
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  background: curTab === 'S' ? '#fff' : 'var(--ok)',
+                }}
+                aria-hidden="true"
+              />
+            )}
             <svg
               width="20"
               height="20"
@@ -3866,11 +4312,14 @@ export default function App() {
 
               return (
                 <div className="file-summary" aria-label={t.outputPreviewTitle}>
-                  <div className="file-summary-title">{t.outputPreviewTitle}</div>
+                  <div className="file-summary-title">
+                    <EmojiIcon name={caughtMode === 'audio' ? 'music' : 'video'} size={16} />
+                    <span>{t.outputPreviewTitle}</span>
+                  </div>
                   <div className="file-summary-row">
                     <span className="k">{t.outputFileNameLabel}</span>
-                    <span className="v" dir="auto" title={predictedName}>
-                      {predictedName}
+                    <span className="v" title={predictedName}>
+                      {renderFileName(predictedName)}
                     </span>
                   </div>
                   <div className="file-summary-row">
@@ -3975,8 +4424,14 @@ export default function App() {
                     <path d="M5 12l5 5 9-10" />
                   </svg>
                 </div>
-                <div className="upd-pill ok">{t.updateLatestPill}</div>
-                <h3>{t.updateLatestTitle}</h3>
+                <div className="upd-pill ok">
+                  <EmojiIcon name="sparkles" size={14} />
+                  <span>{t.updateLatestPill}</span>
+                </div>
+                <h3 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                  <span>{t.updateLatestTitle}</span>
+                  <EmojiIcon name="sparkles" size={20} />
+                </h3>
                 <p>
                   {t.updateLatestDescBefore}
                   <span style={{ color: 'var(--acc)', fontWeight: 700 }}>{APP_VERSION}</span>
@@ -4010,8 +4465,14 @@ export default function App() {
                     <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
                   </svg>
                 </div>
-                <div className="upd-pill">{t.updateAvailPill}</div>
-                <h3>{t.updateAvailTitle}</h3>
+                <div className="upd-pill">
+                  <EmojiIcon name="sparkles" size={14} />
+                  <span>{t.updateAvailPill}</span>
+                </div>
+                <h3 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                  <span>{t.updateAvailTitle}</span>
+                  <EmojiIcon name="sparkles" size={20} />
+                </h3>
                 <p style={{ marginBottom: '14px' }}>
                   {t.updateAvailVersionPrefix}
                   <span style={{ color: 'var(--acc)', fontWeight: 700 }}>{updateInfo.version}</span>
@@ -4157,32 +4618,11 @@ export default function App() {
         <div className="nbn">
           <div className="ni">
             {toastMsg.icon === 'bell' ? (
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-              </svg>
+              <EmojiIcon name="bell" size={20} />
+            ) : toastMsg.icon === 'clipboard' ? (
+              <EmojiIcon name="clipboard" size={20} />
             ) : (
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M5 12l5 5 9-10" />
-              </svg>
+              <EmojiIcon name="check" size={20} />
             )}
           </div>
           <div style={{ minWidth: 0 }}>

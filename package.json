@@ -1,7 +1,7 @@
 {
   "name": "react-example",
   "private": true,
-  "version": "1.2.4",
+  "version": "1.2.5",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -16,11 +16,14 @@
     "@capacitor/cli": "^8.6.0",
     "@capacitor/clipboard": "^8.0.1",
     "@capacitor/core": "^8.6.0",
+    "@firebase/eslint-plugin-security-rules": "^0.0.2",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
     "dotenv": "^17.2.3",
+    "eslint": "^10.15.0",
     "express": "^4.21.2",
+    "firebase": "^13.4.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",

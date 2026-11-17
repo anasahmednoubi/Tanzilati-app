@@ -44,6 +44,7 @@ interface FormatOption {
   descAr: string;
   descEn: string;
   sizeText: string;
+  sizeBytes?: number;
   height?: number;
   directUrl?: string;
   audioUrl?: string;
@@ -64,7 +65,24 @@ interface MediaInfoResult {
   audioOptions: FormatOption[];
   fallbackStreamUrl?: string;
   fallbackAudioUrl?: string;
+  previewUrl?: string;
+  embedUrl?: string;
   userAgent?: string;
+}
+
+interface PreviewEntry {
+  url: string;
+  userAgent?: string;
+  createdAt: number;
+}
+
+const previewStreams = new Map<string, PreviewEntry>();
+
+function registerPreviewStream(url?: string, userAgent?: string): string | undefined {
+  if (!url) return undefined;
+  const id = `pv_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  previewStreams.set(id, { url, userAgent, createdAt: Date.now() });
+  return `/api/preview/${id}`;
 }
 
 interface DownloadJob {
@@ -86,7 +104,7 @@ interface DownloadJob {
 
 const jobs = new Map<string, DownloadJob>();
 
-// Periodic cleanup of expired jobs & temp files (> 20 mins)
+// Periodic cleanup of expired jobs, preview tokens & temp files (> 20 mins)
 setInterval(() => {
   const now = Date.now();
   for (const [id, job] of jobs.entries()) {
@@ -95,6 +113,11 @@ setInterval(() => {
         fsp.unlink(job.filePath).catch(() => {});
       }
       jobs.delete(id);
+    }
+  }
+  for (const [pid, pv] of previewStreams.entries()) {
+    if (now - pv.createdAt > 20 * 60 * 1000) {
+      previewStreams.delete(pid);
     }
   }
 }, 5 * 60 * 1000);
@@ -141,12 +164,46 @@ function formatDuration(seconds?: number | null): string {
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-function formatBytes(bytes?: number | null): string {
+function formatBytes(bytes?: number | null, exact = false): string {
   if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return '—';
+  const prefix = exact ? '' : '~';
   const mb = bytes / (1024 * 1024);
-  if (mb >= 1) return `~${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
+  if (mb >= 1) return `${prefix}${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
   const kb = bytes / 1024;
-  return `~${Math.max(1, Math.round(kb))} KB`;
+  return `${prefix}${Math.max(1, Math.round(kb))} KB`;
+}
+
+async function probeContentLength(streamUrl?: string, customUa?: string): Promise<number | undefined> {
+  if (!streamUrl) return undefined;
+  const ua =
+    customUa ||
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+  try {
+    const head = await fetch(streamUrl, {
+      method: 'HEAD',
+      headers: { 'User-Agent': ua },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (head.ok) {
+      const cl = Number(head.headers.get('content-length')) || 0;
+      if (cl > 0) return cl;
+    }
+    const rng = await fetch(streamUrl, {
+      headers: { Range: 'bytes=0-0', 'User-Agent': ua },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (rng.ok || rng.status === 206) {
+      const cr = rng.headers.get('content-range') || '';
+      const totalMatch = cr.match(/\/(\d+)$/);
+      if (totalMatch) {
+        const total = Number(totalMatch[1]);
+        if (total > 0) return total;
+      }
+      const cl = Number(rng.headers.get('content-length')) || 0;
+      if (cl > 1) return cl;
+    }
+  } catch {}
+  return undefined;
 }
 
 function normalizeUrl(raw: string): string {
@@ -188,9 +245,12 @@ function extractYouTubeId(rawUrl: string): string | null {
   return null;
 }
 
-function defaultAudioOptions(durationSec = 120): FormatOption[] {
+function defaultAudioOptions(durationSec = 0, exactM4aBytes?: number): FormatOption[] {
+  const hasDur = Number.isFinite(durationSec) && durationSec > 0;
   const est = (kbps: number) =>
-    durationSec > 0 ? formatBytes((kbps * 1000 * durationSec) / 8) : '~8 MB';
+    hasDur ? formatBytes((kbps * 1000 * durationSec) / 8, false) : '—';
+  const estBytes = (kbps: number) =>
+    hasDur ? Math.round((kbps * 1000 * durationSec) / 8) : undefined;
   return [
     {
       key: 'mp3-320',
@@ -199,6 +259,7 @@ function defaultAudioOptions(durationSec = 120): FormatOption[] {
       descAr: 'MP3 · أنقى صوت',
       descEn: 'MP3 · Purest Audio',
       sizeText: est(320),
+      sizeBytes: estBytes(320),
     },
     {
       key: 'mp3-192',
@@ -207,14 +268,19 @@ function defaultAudioOptions(durationSec = 120): FormatOption[] {
       descAr: 'MP3 · جودة معيارية',
       descEn: 'MP3 · Standard Quality',
       sizeText: est(192),
+      sizeBytes: estBytes(192),
     },
     {
       key: 'm4a',
-      labelAr: 'M4A – صوت AAC عالي الكفاءة',
-      labelEn: 'M4A – High Efficiency AAC',
+      labelAr: 'M4A – صوت AAC أصلي',
+      labelEn: 'M4A – Original AAC Audio',
       descAr: 'M4A / AAC',
       descEn: 'M4A / AAC',
-      sizeText: est(160),
+      sizeText:
+        exactM4aBytes && exactM4aBytes > 0
+          ? formatBytes(exactM4aBytes, true)
+          : est(128),
+      sizeBytes: exactM4aBytes && exactM4aBytes > 0 ? exactM4aBytes : estBytes(128),
     },
     {
       key: 'opus',
@@ -222,7 +288,8 @@ function defaultAudioOptions(durationSec = 120): FormatOption[] {
       labelEn: 'Opus – Smallest Size',
       descAr: 'Opus · فائق الخفة',
       descEn: 'Opus · Ultra Light',
-      sizeText: est(112),
+      sizeText: est(128),
+      sizeBytes: estBytes(128),
     },
   ];
 }
@@ -384,7 +451,8 @@ async function resolveYouTubeViaPiped(videoId: string, originalUrl: string): Pro
             labelEn: h >= 1080 ? `${h}p (Full HD)` : h === 720 ? `${h}p (HD)` : `${h}p`,
             descAr: `MP4 · ${h >= 720 ? 'عالي الوضوح' : 'جودة قياسية'}`,
             descEn: `MP4 · ${h >= 720 ? 'High Definition' : 'Standard'}`,
-            sizeText: totalBytes > 0 ? formatBytes(totalBytes) : 'MP4',
+            sizeText: totalBytes > 0 ? formatBytes(totalBytes, true) : '—',
+            sizeBytes: totalBytes > 0 ? totalBytes : undefined,
             height: h,
             directUrl: v.url,
             audioUrl: bestAudio.url,
@@ -397,6 +465,7 @@ async function resolveYouTubeViaPiped(videoId: string, originalUrl: string): Pro
           workingProgressive.stream.height ||
           parseInt(String(workingProgressive.stream.quality || '360'), 10) ||
           360;
+        const pBytes = workingProgressive.size || workingProgressive.stream.contentLength || 0;
         if (!seenHeight.has(h)) {
           seenHeight.add(h);
           usableOptions.push({
@@ -405,7 +474,8 @@ async function resolveYouTubeViaPiped(videoId: string, originalUrl: string): Pro
             labelEn: `${h}p (Direct MP4)`,
             descAr: 'MP4 · صوت وصورة مدمجين',
             descEn: 'MP4 · Video + Audio',
-            sizeText: formatBytes(workingProgressive.size || workingProgressive.stream.contentLength),
+            sizeText: pBytes > 0 ? formatBytes(pBytes, true) : '—',
+            sizeBytes: pBytes > 0 ? pBytes : undefined,
             height: h,
             directUrl: workingProgressive.stream.url,
           });
@@ -424,6 +494,7 @@ async function resolveYouTubeViaPiped(videoId: string, originalUrl: string): Pro
           descAr: bestOpt.descAr,
           descEn: bestOpt.descEn,
           sizeText: bestOpt.sizeText,
+          sizeBytes: bestOpt.sizeBytes,
           height: bestOpt.height,
           directUrl: bestOpt.directUrl,
           audioUrl: bestOpt.audioUrl,
@@ -433,6 +504,7 @@ async function resolveYouTubeViaPiped(videoId: string, originalUrl: string): Pro
 
       const fallbackStreamUrl = workingProgressive?.stream.url || bestOpt.directUrl;
       const fallbackAudioUrl = audioOk && bestAudio ? bestAudio.url : workingProgressive?.stream.url;
+      const previewUrl = workingProgressive?.stream.url || bestOpt.directUrl;
 
       return {
         url: originalUrl,
@@ -445,9 +517,11 @@ async function resolveYouTubeViaPiped(videoId: string, originalUrl: string): Pro
         platformEn: 'YouTube',
         engine: 'piped',
         videoOptions,
-        audioOptions: defaultAudioOptions(Number(data.duration) || 120),
+        audioOptions: defaultAudioOptions(Number(data.duration) || 0, Number(bestAudio?.contentLength) || undefined),
         fallbackStreamUrl,
         fallbackAudioUrl,
+        previewUrl,
+        embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?rel=0&playsinline=1`,
       };
     } catch {}
   }
@@ -469,7 +543,13 @@ async function resolveTikTok(targetUrl: string): Promise<MediaInfoResult | null>
     const sdUrl = d.play || d.hdplay;
     if (!hdUrl && !sdUrl) return null;
 
-    const dur = Number(d.duration) || 30;
+    const dur = Number(d.duration) || 0;
+    const [hdSize, sdSize, musicSize] = await Promise.all([
+      Number(d.hd_size) > 0 ? Promise.resolve(Number(d.hd_size)) : probeContentLength(hdUrl),
+      Number(d.size) > 0 ? Promise.resolve(Number(d.size)) : sdUrl && sdUrl !== hdUrl ? probeContentLength(sdUrl) : Promise.resolve(undefined),
+      d.music ? probeContentLength(d.music) : Promise.resolve(undefined),
+    ]);
+
     const videoOptions: FormatOption[] = [
       {
         key: 'best',
@@ -477,7 +557,8 @@ async function resolveTikTok(targetUrl: string): Promise<MediaInfoResult | null>
         labelEn: 'Best Quality (No Watermark)',
         descAr: 'MP4 · HD أصلي',
         descEn: 'MP4 · Original HD',
-        sizeText: formatBytes(d.hd_size || d.size),
+        sizeText: hdSize ? formatBytes(hdSize, true) : sdSize ? formatBytes(sdSize, true) : '—',
+        sizeBytes: hdSize || sdSize,
         height: 1080,
         directUrl: hdUrl,
       },
@@ -489,7 +570,8 @@ async function resolveTikTok(targetUrl: string): Promise<MediaInfoResult | null>
         labelEn: 'Standard Quality (Compact)',
         descAr: 'MP4 · بدون علامة مائية',
         descEn: 'MP4 · No Watermark',
-        sizeText: formatBytes(d.size),
+        sizeText: sdSize ? formatBytes(sdSize, true) : '—',
+        sizeBytes: sdSize,
         height: 480,
         directUrl: sdUrl,
       });
@@ -506,9 +588,10 @@ async function resolveTikTok(targetUrl: string): Promise<MediaInfoResult | null>
       platformEn: 'TikTok',
       engine: 'tikwm',
       videoOptions,
-      audioOptions: defaultAudioOptions(dur),
+      audioOptions: defaultAudioOptions(dur, musicSize),
       fallbackStreamUrl: hdUrl,
       fallbackAudioUrl: d.music || hdUrl,
+      previewUrl: sdUrl || hdUrl,
     };
   } catch {
     return null;
@@ -539,7 +622,11 @@ async function resolveFxTwitter(targetUrl: string): Promise<MediaInfoResult | nu
     const bestUrl = variants[0]?.url || v.url;
     if (!bestUrl) return null;
 
-    const dur = Number(v.duration) || 30;
+    const dur = Number(v.duration) || 0;
+    const topVariants = variants.slice(0, 3);
+    const probedSizes = await Promise.all(topVariants.map((vr) => probeContentLength(vr.url)));
+    const bestBytes = probedSizes[0] ?? (await probeContentLength(bestUrl));
+
     const videoOptions: FormatOption[] = [
       {
         key: 'best',
@@ -547,20 +634,25 @@ async function resolveFxTwitter(targetUrl: string): Promise<MediaInfoResult | nu
         labelEn: 'Best Available Quality',
         descAr: 'MP4 · أعلى دقة',
         descEn: 'MP4 · Highest Resolution',
-        sizeText: 'MP4',
+        sizeText: bestBytes ? formatBytes(bestBytes, true) : '—',
+        sizeBytes: bestBytes,
         height: 1080,
         directUrl: bestUrl,
       },
-      ...variants.slice(0, 3).map((vr, idx) => ({
-        key: idx === 0 ? '720' : idx === 1 ? '480' : '360',
-        labelAr: idx === 0 ? 'جودة عالية (HD)' : idx === 1 ? 'جودة متوسطة' : 'حجم أصغر',
-        labelEn: idx === 0 ? 'High Quality (HD)' : idx === 1 ? 'Medium Quality' : 'Compact Size',
-        descAr: vr.bitrate ? `MP4 · ${Math.round(vr.bitrate / 1000)} kbps` : 'MP4',
-        descEn: vr.bitrate ? `MP4 · ${Math.round(vr.bitrate / 1000)} kbps` : 'MP4',
-        sizeText: 'MP4',
-        height: idx === 0 ? 720 : idx === 1 ? 480 : 360,
-        directUrl: vr.url,
-      })),
+      ...topVariants.map((vr, idx) => {
+        const bytes = probedSizes[idx];
+        return {
+          key: idx === 0 ? '720' : idx === 1 ? '480' : '360',
+          labelAr: idx === 0 ? 'جودة عالية (HD)' : idx === 1 ? 'جودة متوسطة' : 'حجم أصغر',
+          labelEn: idx === 0 ? 'High Quality (HD)' : idx === 1 ? 'Medium Quality' : 'Compact Size',
+          descAr: vr.bitrate ? `MP4 · ${Math.round(vr.bitrate / 1000)} kbps` : 'MP4',
+          descEn: vr.bitrate ? `MP4 · ${Math.round(vr.bitrate / 1000)} kbps` : 'MP4',
+          sizeText: bytes ? formatBytes(bytes, true) : '—',
+          sizeBytes: bytes,
+          height: idx === 0 ? 720 : idx === 1 ? 480 : 360,
+          directUrl: vr.url,
+        };
+      }),
     ];
 
     return {
@@ -577,6 +669,7 @@ async function resolveFxTwitter(targetUrl: string): Promise<MediaInfoResult | nu
       audioOptions: defaultAudioOptions(dur),
       fallbackStreamUrl: bestUrl,
       fallbackAudioUrl: bestUrl,
+      previewUrl: topVariants[topVariants.length - 1]?.url || bestUrl,
     };
   } catch {
     return null;
@@ -585,8 +678,20 @@ async function resolveFxTwitter(targetUrl: string): Promise<MediaInfoResult | nu
 
 function buildYtDlpMediaInfo(targetUrl: string, raw: any): MediaInfoResult {
   const extractor = String(raw.extractor_key || raw.extractor || 'Video');
-  const dur = Number(raw.duration) || 120;
+  const dur = Number(raw.duration) || 0;
   const formats: any[] = Array.isArray(raw.formats) ? raw.formats : [];
+
+  const bestAudioFmt = formats
+    .filter((f) => (!f.vcodec || f.vcodec === 'none') && f.acodec && f.acodec !== 'none')
+    .sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0))[0];
+
+  const exactAudioBytes = Number(bestAudioFmt?.filesize || bestAudioFmt?.filesize_approx || 0);
+  const approxAudioBytes =
+    exactAudioBytes > 0
+      ? exactAudioBytes
+      : dur > 0 && bestAudioFmt?.tbr
+        ? Math.round((Number(bestAudioFmt.tbr) * 1000 * dur) / 8)
+        : 0;
 
   const heights = Array.from(
     new Set(
@@ -601,15 +706,34 @@ function buildYtDlpMediaInfo(targetUrl: string, raw: any): MediaInfoResult {
       .filter((f) => f.vcodec && f.vcodec !== 'none' && (f.height || 0) <= maxH)
       .sort((a, b) => (b.height || 0) - (a.height || 0) || (b.tbr || 0) - (a.tbr || 0))[0];
 
-  const estimateForHeight = (h: number) => {
+  const estimateForHeight = (h: number): { sizeText: string; sizeBytes?: number } => {
     const f = pickNearest(h);
-    const sz = f?.filesize || f?.filesize_approx;
-    return sz ? formatBytes(sz) : `≤${h}p`;
+    if (!f) return { sizeText: '—' };
+    const hasAudioBuiltIn = f.acodec && f.acodec !== 'none';
+    const rawSize = Number(f.filesize || 0);
+    const approxSize = Number(f.filesize_approx || 0);
+    if (rawSize > 0) {
+      const total = hasAudioBuiltIn ? rawSize : rawSize + (exactAudioBytes || approxAudioBytes);
+      return { sizeText: formatBytes(total, hasAudioBuiltIn || exactAudioBytes > 0), sizeBytes: total };
+    }
+    if (approxSize > 0) {
+      const total = hasAudioBuiltIn ? approxSize : approxSize + approxAudioBytes;
+      return { sizeText: formatBytes(total, false), sizeBytes: total };
+    }
+    const vTbr = Number(f.vbr || f.tbr || 0);
+    if (dur > 0 && vTbr > 0) {
+      const aTbr = hasAudioBuiltIn ? 0 : Number(bestAudioFmt?.abr || bestAudioFmt?.tbr || 128);
+      const calcBytes = Math.round(((vTbr + aTbr) * 1000 * dur) / 8);
+      return { sizeText: formatBytes(calcBytes, false), sizeBytes: calcBytes };
+    }
+    return { sizeText: '—' };
   };
 
   const targetHeights = heights.length
     ? [1080, 720, 480, 360].filter((th) => heights.some((h) => h >= th - 60))
     : [720, 480, 360];
+
+  const bestEst = estimateForHeight(heights[0] || 1080);
 
   const videoOptions: FormatOption[] = [
     {
@@ -618,19 +742,36 @@ function buildYtDlpMediaInfo(targetUrl: string, raw: any): MediaInfoResult {
       labelEn: `Best Available Quality${heights[0] ? ` (${heights[0]}p)` : ''}`,
       descAr: 'MP4 · أعلى جودة صوت وصورة',
       descEn: 'MP4 · Highest Audio & Video',
-      sizeText: estimateForHeight(heights[0] || 1080),
+      sizeText: bestEst.sizeText,
+      sizeBytes: bestEst.sizeBytes,
       height: heights[0] || 1080,
     },
-    ...(targetHeights.length ? targetHeights : [720, 480, 360]).map((h) => ({
-      key: String(h),
-      labelAr: h >= 1080 ? '1080p (Full HD)' : h === 720 ? '720p (HD)' : `${h}p`,
-      labelEn: h >= 1080 ? '1080p (Full HD)' : h === 720 ? '720p (HD)' : `${h}p`,
-      descAr: h >= 720 ? 'MP4 · عالي الوضوح' : 'MP4 · موفر للبيانات',
-      descEn: h >= 720 ? 'MP4 · High Definition' : 'MP4 · Data Saver',
-      sizeText: estimateForHeight(h),
-      height: h,
-    })),
+    ...(targetHeights.length ? targetHeights : [720, 480, 360]).map((h) => {
+      const est = estimateForHeight(h);
+      return {
+        key: String(h),
+        labelAr: h >= 1080 ? '1080p (Full HD)' : h === 720 ? '720p (HD)' : `${h}p`,
+        labelEn: h >= 1080 ? '1080p (Full HD)' : h === 720 ? '720p (HD)' : `${h}p`,
+        descAr: h >= 720 ? 'MP4 · عالي الوضوح' : 'MP4 · موفر للبيانات',
+        descEn: h >= 720 ? 'MP4 · High Definition' : 'MP4 · Data Saver',
+        sizeText: est.sizeText,
+        sizeBytes: est.sizeBytes,
+        height: h,
+      };
+    }),
   ];
+
+  const progressivePreview = formats
+    .filter(
+      (f) =>
+        f.url &&
+        f.vcodec &&
+        f.vcodec !== 'none' &&
+        f.acodec &&
+        f.acodec !== 'none' &&
+        (f.ext === 'mp4' || String(f.protocol || '').startsWith('http'))
+    )
+    .sort((a, b) => (b.height || 0) - (a.height || 0))[0];
 
   const isArabicPlatform: Record<string, string> = {
     Youtube: 'يوتيوب',
@@ -643,6 +784,8 @@ function buildYtDlpMediaInfo(targetUrl: string, raw: any): MediaInfoResult {
     Vimeo: 'فيميو',
   };
 
+  const ytId = extractYouTubeId(targetUrl);
+
   return {
     url: targetUrl,
     title: String(raw.title || 'Media'),
@@ -654,7 +797,10 @@ function buildYtDlpMediaInfo(targetUrl: string, raw: any): MediaInfoResult {
     platformEn: extractor,
     engine: 'yt-dlp',
     videoOptions,
-    audioOptions: defaultAudioOptions(dur),
+    audioOptions: defaultAudioOptions(dur, exactAudioBytes > 0 ? exactAudioBytes : approxAudioBytes || undefined),
+    previewUrl: progressivePreview?.url,
+    embedUrl: ytId ? `https://www.youtube-nocookie.com/embed/${ytId}?rel=0&playsinline=1` : undefined,
+    userAgent: progressivePreview?.http_headers?.['User-Agent'],
   };
 }
 
@@ -669,7 +815,7 @@ async function resolveDirectMedia(targetUrl: string): Promise<MediaInfoResult | 
     const ct = (res.headers.get('content-type') || '').toLowerCase();
     if (!ct.startsWith('video/') && !ct.startsWith('audio/')) return null;
 
-    const len = Number(res.headers.get('content-length')) || 0;
+    const len = (Number(res.headers.get('content-length')) || 0) || (await probeContentLength(targetUrl)) || 0;
     const pathname = new URL(targetUrl).pathname;
     const fileTitle = decodeURIComponent(path.basename(pathname) || 'media-file').replace(/\.[^.]+$/, '');
 
@@ -678,7 +824,7 @@ async function resolveDirectMedia(targetUrl: string): Promise<MediaInfoResult | 
       title: fileTitle || 'Media File',
       author: new URL(targetUrl).hostname.replace(/^www\./, ''),
       duration: '—',
-      durationSec: 60,
+      durationSec: 0,
       thumbnail: '',
       platformAr: 'رابط مباشر',
       platformEn: 'Direct Media',
@@ -690,13 +836,15 @@ async function resolveDirectMedia(targetUrl: string): Promise<MediaInfoResult | 
           labelEn: 'Original Quality (Direct File)',
           descAr: ct.toUpperCase(),
           descEn: ct.toUpperCase(),
-          sizeText: formatBytes(len),
+          sizeText: len > 0 ? formatBytes(len, true) : '—',
+          sizeBytes: len > 0 ? len : undefined,
           directUrl: targetUrl,
         },
       ],
-      audioOptions: defaultAudioOptions(60),
+      audioOptions: defaultAudioOptions(0, ct.startsWith('audio/') && len > 0 ? len : undefined),
       fallbackStreamUrl: targetUrl,
       fallbackAudioUrl: targetUrl,
+      previewUrl: ct.startsWith('video/') ? targetUrl : undefined,
     };
   } catch {
     return null;
@@ -779,7 +927,8 @@ async function resolveYouTubeViaInnerTube(
           labelEn: h >= 1080 ? `${h}p (Full HD)` : h === 720 ? `${h}p (HD)` : `${h}p`,
           descAr: h >= 720 ? 'MP4 · عالي الوضوح' : 'MP4 · موفر للبيانات',
           descEn: h >= 720 ? 'MP4 · High Definition' : 'MP4 · Data Saver',
-          sizeText: totalBytes > 0 ? formatBytes(totalBytes) : `${h}p`,
+          sizeText: totalBytes > 0 ? formatBytes(totalBytes, true) : '—',
+          sizeBytes: totalBytes > 0 ? totalBytes : undefined,
           height: h,
           directUrl: f.url,
           audioUrl: bestAudio.url,
@@ -790,6 +939,7 @@ async function resolveYouTubeViaInnerTube(
 
     if (bestProg) {
       const ph = Number(bestProg.height) || 360;
+      const progBytes = Number(bestProg.contentLength) || 0;
       if (!seenHeights.has(ph)) {
         seenHeights.add(ph);
         videoOptions.push({
@@ -798,7 +948,8 @@ async function resolveYouTubeViaInnerTube(
           labelEn: `${ph}p (Direct MP4)`,
           descAr: 'MP4 · صوت وصورة مدمجين',
           descEn: 'MP4 · Video + Audio',
-          sizeText: formatBytes(Number(bestProg.contentLength) || 0),
+          sizeText: progBytes > 0 ? formatBytes(progBytes, true) : '—',
+          sizeBytes: progBytes > 0 ? progBytes : undefined,
           height: ph,
           directUrl: bestProg.url,
           userAgent: INNERTUBE_VR_UA,
@@ -818,6 +969,7 @@ async function resolveYouTubeViaInnerTube(
         descAr: top.descAr,
         descEn: top.descEn,
         sizeText: top.sizeText,
+        sizeBytes: top.sizeBytes,
         height: top.height,
         directUrl: top.directUrl,
         audioUrl: top.audioUrl,
@@ -825,6 +977,8 @@ async function resolveYouTubeViaInnerTube(
       },
       ...videoOptions,
     ];
+
+    const audioBytes = Number(bestAudio?.contentLength) || undefined;
 
     return {
       url: originalUrl,
@@ -837,9 +991,11 @@ async function resolveYouTubeViaInnerTube(
       platformEn: 'YouTube',
       engine: 'innertube',
       videoOptions: finalOptions,
-      audioOptions: defaultAudioOptions(durSec),
+      audioOptions: defaultAudioOptions(durSec, audioBytes),
       fallbackStreamUrl: bestProg?.url || top.directUrl,
       fallbackAudioUrl: bestAudio?.url || bestProg?.url,
+      previewUrl: bestProg?.url || top.directUrl,
+      embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?rel=0&playsinline=1`,
       userAgent: INNERTUBE_VR_UA,
     };
   } catch {
@@ -869,6 +1025,8 @@ async function resolveSocialHtmlFallback(targetUrl: string): Promise<MediaInfoRe
       .replace(/&amp;/g, '&');
     if (!cleanStream.startsWith('http')) return null;
 
+    const probedSize = await probeContentLength(cleanStream, mobileUA);
+
     const titleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
     const thumbMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
     const lower = targetUrl.toLowerCase();
@@ -888,7 +1046,7 @@ async function resolveSocialHtmlFallback(targetUrl: string): Promise<MediaInfoRe
       title: (titleMatch?.[1] || `${platEn} Video`).slice(0, 80),
       author: platEn,
       duration: '—',
-      durationSec: 60,
+      durationSec: 0,
       thumbnail: thumbMatch?.[1]?.replace(/&amp;/g, '&') || '',
       platformAr: platAr,
       platformEn: platEn,
@@ -900,14 +1058,16 @@ async function resolveSocialHtmlFallback(targetUrl: string): Promise<MediaInfoRe
           labelEn: 'Best Available Quality (MP4)',
           descAr: 'MP4 · حفظ مباشر',
           descEn: 'MP4 · Direct Save',
-          sizeText: 'MP4',
+          sizeText: probedSize ? formatBytes(probedSize, true) : '—',
+          sizeBytes: probedSize,
           directUrl: cleanStream,
           userAgent: mobileUA,
         },
       ],
-      audioOptions: defaultAudioOptions(60),
+      audioOptions: defaultAudioOptions(0),
       fallbackStreamUrl: cleanStream,
       fallbackAudioUrl: cleanStream,
+      previewUrl: cleanStream,
       userAgent: mobileUA,
     };
   } catch {
@@ -1318,6 +1478,7 @@ async function startServer() {
         return;
       }
       const info = await resolveMediaInfo(rawUrl);
+      const previewProxy = registerPreviewStream(info.previewUrl, info.userAgent);
       res.json({
         url: info.url,
         title: info.title,
@@ -1328,21 +1489,78 @@ async function startServer() {
         platformAr: info.platformAr,
         platformEn: info.platformEn,
         engine: info.engine,
-        videoOptions: info.videoOptions.map(({ key, labelAr, labelEn, descAr, descEn, sizeText, height }) => ({
+        previewUrl: previewProxy || info.previewUrl,
+        embedUrl: info.embedUrl,
+        videoOptions: info.videoOptions.map(({ key, labelAr, labelEn, descAr, descEn, sizeText, sizeBytes, height }) => ({
           key,
           labelAr,
           labelEn,
           descAr,
           descEn,
           sizeText,
+          sizeBytes,
           height,
         })),
-        audioOptions: info.audioOptions,
+        audioOptions: info.audioOptions.map(({ key, labelAr, labelEn, descAr, descEn, sizeText, sizeBytes }) => ({
+          key,
+          labelAr,
+          labelEn,
+          descAr,
+          descEn,
+          sizeText,
+          sizeBytes,
+        })),
       });
     } catch (err: any) {
       res.status(422).json({
         error: err?.message || 'EXTRACTION_FAILED',
       });
+    }
+  });
+
+  // 1b. Byte-Range Video Preview Proxy (enables smooth seeking & playback in <video> without CORS/UA blocks)
+  app.get('/api/preview/:previewId', async (req, res) => {
+    const entry = previewStreams.get(req.params.previewId);
+    if (!entry) {
+      res.status(404).end();
+      return;
+    }
+    try {
+      const headers: Record<string, string> = {
+        'User-Agent':
+          entry.userAgent ||
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      };
+      if (req.headers.range) {
+        headers.Range = String(req.headers.range);
+      }
+      const upstream = await fetch(entry.url, {
+        headers,
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!upstream.ok && upstream.status !== 206) {
+        res.status(upstream.status).end();
+        return;
+      }
+      res.status(upstream.status);
+      for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+        const v = upstream.headers.get(h);
+        if (v) res.setHeader(h, v);
+      }
+      if (!upstream.headers.get('content-type')) {
+        res.setHeader('Content-Type', 'video/mp4');
+      }
+      if (!upstream.body) {
+        res.end();
+        return;
+      }
+      const nodeStream = Readable.fromWeb(upstream.body as any);
+      req.on('close', () => {
+        nodeStream.destroy();
+      });
+      nodeStream.pipe(res);
+    } catch {
+      if (!res.headersSent) res.status(502).end();
     }
   });
 

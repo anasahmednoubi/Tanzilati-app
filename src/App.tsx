@@ -107,8 +107,8 @@ interface HistoryEntry {
   fresh?: boolean;
 }
 
-const APP_VERSION = '1.2.3';
-const APP_BUILD = 6;
+const APP_VERSION = '1.2.4';
+const APP_BUILD = 7;
 const GITHUB_REPO = 'anasahmednoubi/Tanzilati-app';
 
 const compareSemver = (a: string, b: string): number => {
@@ -162,6 +162,7 @@ interface ServerFormatOption {
   descAr: string;
   descEn: string;
   sizeText: string;
+  sizeBytes?: number;
   height?: number;
   directUrl?: string;
   audioUrl?: string;
@@ -182,6 +183,8 @@ interface ServerMediaInfo {
   audioOptions: ServerFormatOption[];
   fallbackStreamUrl?: string;
   fallbackAudioUrl?: string;
+  previewUrl?: string;
+  embedUrl?: string;
   userAgent?: string;
 }
 
@@ -226,6 +229,8 @@ interface CaughtVideoInfo {
   duration: string;
   platform: string;
   thumbnail?: string;
+  previewUrl?: string;
+  embedUrl?: string;
   videoOptions?: ServerFormatOption[];
   audioOptions?: ServerFormatOption[];
   source?: 'share' | 'clipboard';
@@ -293,6 +298,14 @@ async function writeClipboardSafely(str: string): Promise<boolean> {
   return false;
 }
 
+function formatClientBytes(bytes?: number | null, exact = false): string {
+  if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return '—';
+  const prefix = exact ? '' : '~';
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) return `${prefix}${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
+  return `${prefix}${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
 // Standalone client-side media resolver (works 100% offline or on Android APK when backend server is unreachable)
 async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): Promise<ServerMediaInfo | null> {
   const isEn = currentLang === 'en';
@@ -302,15 +315,24 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
   // 1. TIKTOK (TikWM public CORS-enabled API -> direct watermark-free MP4 & MP3)
   if (lower.includes('tiktok.com')) {
     try {
-      const res = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(cleanUrl)}`, {
+      const res = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(cleanUrl)}&hd=1`, {
         signal: AbortSignal.timeout(6000),
       });
       if (res.ok) {
         const j = await res.json();
         if (j && j.data) {
           const d = j.data;
-          const durSec = Number(d.duration) || 30;
-          const durStr = `${Math.floor(durSec / 60)}:${String(durSec % 60).padStart(2, '0')}`;
+          const durSec = Number(d.duration) || 0;
+          const durStr =
+            durSec > 0
+              ? `${Math.floor(durSec / 60)}:${String(durSec % 60).padStart(2, '0')}`
+              : '—';
+          const hdBytes = Number(d.hd_size) || Number(d.size) || 0;
+          const sdBytes = Number(d.size) || 0;
+          const hdUrl = d.hdplay || d.play;
+          const sdUrl = d.play || hdUrl;
+          const audBytes320 = durSec > 0 ? Math.round((320 * 1000 * durSec) / 8) : 0;
+          const audBytes128 = durSec > 0 ? Math.round((128 * 1000 * durSec) / 8) : 0;
           return {
             url: cleanUrl,
             title: d.title || (isEn ? 'TikTok Video' : 'فيديو تيك توك'),
@@ -321,6 +343,7 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
             platformAr: 'تيك توك',
             platformEn: 'TikTok',
             engine: 'tikwm',
+            previewUrl: sdUrl || hdUrl,
             videoOptions: [
               {
                 key: 'best',
@@ -328,18 +351,24 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
                 labelEn: 'Best Available (HD No Watermark)',
                 descAr: 'MP4 · بدون علامة مائية',
                 descEn: 'MP4 · Watermark Free',
-                sizeText: '~15 MB',
-                directUrl: d.play,
+                sizeText: hdBytes > 0 ? formatClientBytes(hdBytes, true) : '—',
+                sizeBytes: hdBytes > 0 ? hdBytes : undefined,
+                directUrl: hdUrl,
               },
-              {
-                key: 'wm',
-                labelAr: 'مع علامة مائية',
-                labelEn: 'With Watermark',
-                descAr: 'MP4 · النسخة الأصلية',
-                descEn: 'MP4 · Original Copy',
-                sizeText: '~12 MB',
-                directUrl: d.wmplay || d.play,
-              },
+              ...(sdUrl && sdUrl !== hdUrl
+                ? [
+                    {
+                      key: '480',
+                      labelAr: 'جودة قياسية (موفر للبيانات)',
+                      labelEn: 'Standard Quality (Compact)',
+                      descAr: 'MP4 · بدون علامة مائية',
+                      descEn: 'MP4 · Watermark Free',
+                      sizeText: sdBytes > 0 ? formatClientBytes(sdBytes, true) : '—',
+                      sizeBytes: sdBytes > 0 ? sdBytes : undefined,
+                      directUrl: sdUrl,
+                    },
+                  ]
+                : []),
             ],
             audioOptions: [
               {
@@ -348,8 +377,19 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
                 labelEn: 'MP3 – High Quality Original Sound',
                 descAr: 'MP3 · استخراج الصوت فقط',
                 descEn: 'MP3 · Audio Extract Only',
-                sizeText: '~3 MB',
-                directUrl: d.music,
+                sizeText: audBytes320 > 0 ? formatClientBytes(audBytes320, false) : '—',
+                sizeBytes: audBytes320 > 0 ? audBytes320 : undefined,
+                directUrl: d.music || hdUrl,
+              },
+              {
+                key: 'm4a',
+                labelAr: 'M4A – صوت AAC أصلي',
+                labelEn: 'M4A – Original AAC Audio',
+                descAr: 'M4A / AAC',
+                descEn: 'M4A / AAC',
+                sizeText: audBytes128 > 0 ? formatClientBytes(audBytes128, false) : '—',
+                sizeBytes: audBytes128 > 0 ? audBytes128 : undefined,
+                directUrl: d.music || hdUrl,
               },
             ],
           };
@@ -367,6 +407,7 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
     let title = isEn ? 'YouTube Video' : 'فيديو يوتيوب';
     let author = isEn ? 'YouTube Channel' : 'قناة يوتيوب';
     let thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    let durSec = 0;
 
     // Fast oEmbed check
     try {
@@ -384,7 +425,9 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
 
     // Check Piped instances for direct progressive streams
     let directVideo: string | undefined;
+    let directVideoBytes = 0;
     let directAudio: string | undefined;
+    let directAudioBytes = 0;
     for (const host of ['https://api.piped.private.coffee', 'https://pipedapi.kavin.rocks']) {
       try {
         const pRes = await fetch(`${host}/streams/${videoId}`, {
@@ -394,28 +437,44 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
           const pData = await pRes.json();
           if (pData.title) title = pData.title;
           if (pData.uploader) author = pData.uploader;
+          if (Number(pData.duration) > 0) durSec = Number(pData.duration);
           const prog = pData.videoStreams?.find(
             (v: any) => !v.videoOnly && v.format !== 'HLS' && v.url
           );
-          if (prog) directVideo = prog.url;
+          if (prog) {
+            directVideo = prog.url;
+            directVideoBytes = Number(prog.contentLength) || 0;
+          }
           const aud = pData.audioStreams?.find((a: any) => a.url);
-          if (aud) directAudio = aud.url;
+          if (aud) {
+            directAudio = aud.url;
+            directAudioBytes = Number(aud.contentLength) || 0;
+          }
           if (directVideo || directAudio) break;
         }
       } catch {}
     }
 
+    const durStr =
+      durSec > 0
+        ? `${Math.floor(durSec / 60)}:${String(durSec % 60).padStart(2, '0')}`
+        : '—';
+
     if (directVideo || directAudio) {
+      const aud320 = durSec > 0 ? Math.round((320 * 1000 * durSec) / 8) : 0;
+      const aud128 = directAudioBytes > 0 ? directAudioBytes : durSec > 0 ? Math.round((128 * 1000 * durSec) / 8) : 0;
       return {
         url: cleanUrl,
         title,
         author,
-        duration: '—',
-        durationSec: 120,
+        duration: durStr,
+        durationSec: durSec,
         thumbnail,
         platformAr: 'يوتيوب',
         platformEn: 'YouTube',
         engine: 'client-yt',
+        previewUrl: directVideo,
+        embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?rel=0&playsinline=1`,
         videoOptions: directVideo
           ? [
               {
@@ -424,7 +483,8 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
                 labelEn: 'Best Available (MP4)',
                 descAr: 'MP4 · حفظ مباشر',
                 descEn: 'MP4 · Direct Save',
-                sizeText: 'MP4',
+                sizeText: directVideoBytes > 0 ? formatClientBytes(directVideoBytes, true) : '—',
+                sizeBytes: directVideoBytes > 0 ? directVideoBytes : undefined,
                 directUrl: directVideo,
               },
             ]
@@ -433,11 +493,17 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
           ? [
               {
                 key: 'm4a',
-                labelAr: 'M4A – صوت AAC عالي الكفاءة',
-                labelEn: 'M4A – High Efficiency AAC',
+                labelAr: 'M4A – صوت AAC أصلي',
+                labelEn: 'M4A – Original AAC Audio',
                 descAr: 'M4A / AAC',
                 descEn: 'M4A / AAC',
-                sizeText: 'M4A',
+                sizeText:
+                  directAudioBytes > 0
+                    ? formatClientBytes(directAudioBytes, true)
+                    : aud128 > 0
+                      ? formatClientBytes(aud128, false)
+                      : '—',
+                sizeBytes: aud128 > 0 ? aud128 : undefined,
                 directUrl: directAudio || directVideo,
               },
               {
@@ -446,7 +512,8 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
                 labelEn: 'MP3 – High Quality (320 kbps)',
                 descAr: 'MP3 · أنقى صوت',
                 descEn: 'MP3 · Purest Audio',
-                sizeText: 'MP3',
+                sizeText: aud320 > 0 ? formatClientBytes(aud320, false) : '—',
+                sizeBytes: aud320 > 0 ? aud320 : undefined,
                 directUrl: directAudio || directVideo,
               },
             ]
@@ -471,18 +538,30 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
         const mp4Variants = (vid?.variants || [])
           .filter((v: any) => v.content_type === 'video/mp4' && v.url)
           .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
-        const bestUrl = mp4Variants[0]?.url || vid?.url;
+        const bestVariant = mp4Variants[0];
+        const bestUrl = bestVariant?.url || vid?.url;
         if (bestUrl) {
+          const durSec = Number(vid?.duration) || 0;
+          const durStr =
+            durSec > 0
+              ? `${Math.floor(durSec / 60)}:${String(durSec % 60).padStart(2, '0')}`
+              : '—';
+          const estVideoBytes =
+            durSec > 0 && bestVariant?.bitrate
+              ? Math.round((Number(bestVariant.bitrate) * durSec) / 8)
+              : 0;
+          const estAudioBytes = durSec > 0 ? Math.round((320 * 1000 * durSec) / 8) : 0;
           return {
             url: cleanUrl,
             title: (tweet?.text || (isEn ? 'X Video' : 'فيديو منصة X')).slice(0, 70),
             author: tweet?.author?.name ? `${tweet.author.name} (@${tweet.author.screen_name})` : 'X User',
-            duration: '—',
-            durationSec: vid?.duration || 60,
+            duration: durStr,
+            durationSec: durSec,
             thumbnail: vid?.thumbnail_url || '',
             platformAr: 'منصة X',
             platformEn: 'X Platform',
             engine: 'fxtwitter',
+            previewUrl: mp4Variants[1]?.url || bestUrl,
             videoOptions: [
               {
                 key: 'best',
@@ -490,7 +569,8 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
                 labelEn: 'Best Available (MP4)',
                 descAr: 'MP4 · جودة أصلية',
                 descEn: 'MP4 · Original Quality',
-                sizeText: 'MP4',
+                sizeText: estVideoBytes > 0 ? formatClientBytes(estVideoBytes, false) : '—',
+                sizeBytes: estVideoBytes > 0 ? estVideoBytes : undefined,
                 directUrl: bestUrl,
               },
             ],
@@ -501,7 +581,8 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
                 labelEn: 'MP3 – Audio Extract',
                 descAr: 'MP3 · صوت فقط',
                 descEn: 'MP3 · Audio Only',
-                sizeText: 'MP3',
+                sizeText: estAudioBytes > 0 ? formatClientBytes(estAudioBytes, false) : '—',
+                sizeBytes: estAudioBytes > 0 ? estAudioBytes : undefined,
                 directUrl: bestUrl,
               },
             ],
@@ -524,11 +605,12 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
             title: (j.text || (isEn ? 'X / Twitter Video' : 'فيديو منصة X')).slice(0, 70),
             author: j.user_name ? `${j.user_name} (@${j.user_screen_name})` : 'X User',
             duration: '—',
-            durationSec: 60,
+            durationSec: 0,
             thumbnail: media?.thumbnail_url || '',
             platformAr: 'منصة X',
             platformEn: 'X Platform',
             engine: 'vxtwitter',
+            previewUrl: videoUrl,
             videoOptions: [
               {
                 key: 'best',
@@ -536,7 +618,7 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
                 labelEn: 'Best Available (MP4)',
                 descAr: 'MP4 · جودة أصلية',
                 descEn: 'MP4 · Original Quality',
-                sizeText: 'MP4',
+                sizeText: '—',
                 directUrl: videoUrl,
               },
             ],
@@ -547,7 +629,7 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
                 labelEn: 'MP3 – Audio Extract',
                 descAr: 'MP3 · صوت فقط',
                 descEn: 'MP3 · Audio Only',
-                sizeText: 'MP3',
+                sizeText: '—',
                 directUrl: videoUrl,
               },
             ],
@@ -563,6 +645,7 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
     return null;
   }
 
+  const isAudioExt = /\.(mp3|m4a|aac|wav|ogg)($|\?)/i.test(cleanUrl);
   const cleanTitle = cleanUrl.replace(/^https?:\/\/(www\.)?/, '').slice(0, 50);
   return {
     url: cleanUrl,
@@ -574,6 +657,7 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
     platformAr: 'ملف مباشر',
     platformEn: 'Direct Media',
     engine: 'direct',
+    previewUrl: isAudioExt ? undefined : cleanUrl,
     videoOptions: [
       {
         key: 'best',
@@ -581,7 +665,7 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
         labelEn: 'Best Available (MP4)',
         descAr: 'MP4 · جودة كاملة',
         descEn: 'MP4 · Full Quality',
-        sizeText: 'MP4',
+        sizeText: '—',
         directUrl: cleanUrl,
       },
     ],
@@ -592,7 +676,7 @@ async function resolveMediaClientSide(targetUrl: string, currentLang: AppLang): 
         labelEn: 'MP3 – Original Audio',
         descAr: 'MP3 · استخراج الصوت',
         descEn: 'MP3 · Audio Extract',
-        sizeText: 'MP3',
+        sizeText: '—',
         directUrl: cleanUrl,
       },
     ],
@@ -609,6 +693,35 @@ const apiUrl = (p: string): string => {
     return `${String(base).replace(/\/$/, '')}${p}`;
   }
   return p;
+};
+
+const resolvePreviewSrc = (raw?: string): string | undefined => {
+  if (!raw) return undefined;
+  return raw.startsWith('/api/') ? apiUrl(raw) : raw;
+};
+
+const buildPredictedFilename = (
+  rawTitle: string,
+  isAudio: boolean,
+  formatKey: string,
+  directUrl?: string
+): string => {
+  const safe =
+    rawTitle
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60) || 'tanzeelati-media';
+  if (!isAudio) return `${safe}.mp4`;
+  if (formatKey === 'm4a') return `${safe}.m4a`;
+  if (formatKey === 'opus') return `${safe}.opus`;
+  if (Capacitor.isNativePlatform() && directUrl) {
+    const lower = directUrl.toLowerCase();
+    if (/mime=audio(%2f|\/)mp4|googlevideo\.com|\.m4a(\?|$)|\.mp4(\?|$)/.test(lower)) {
+      return `${safe}.m4a`;
+    }
+  }
+  return `${safe}.mp3`;
 };
 
 export default function App() {
@@ -686,10 +799,15 @@ export default function App() {
     author: string;
     duration: string;
     thumbnail?: string;
+    previewUrl?: string;
+    embedUrl?: string;
     resolvedUrl?: string;
     videoOptions?: ServerFormatOption[];
     audioOptions?: ServerFormatOption[];
   } | null>(null);
+
+  const [mainPreviewActive, setMainPreviewActive] = useState(false);
+  const [mainPreviewMode, setMainPreviewMode] = useState<'video' | 'embed' | 'none'>('video');
 
   const currentVideoTitle = customVideoMeta?.title || t.sampleTitle;
   const currentVideoAuthor = customVideoMeta?.author || t.sampleAuthor;
@@ -781,6 +899,8 @@ export default function App() {
   const [caughtVideo, setCaughtVideo] = useState<CaughtVideoInfo | null>(null);
   const [caughtMode, setCaughtMode] = useState<'video' | 'audio'>('video');
   const [caughtQuality, setCaughtQuality] = useState<string>(OPTIONS_I18N.ar.video[0][0]);
+  const [caughtPreviewActive, setCaughtPreviewActive] = useState(false);
+  const [caughtPreviewMode, setCaughtPreviewMode] = useState<'video' | 'embed' | 'none'>('video');
   const [isResolvingCaught, setIsResolvingCaught] = useState(false);
   const lastClipboardRef = useRef<string>('');
   const lastShareHandledAtRef = useRef<number>(0);
@@ -1176,6 +1296,8 @@ export default function App() {
     setCaughtVideo(initial);
     setCaughtMode('video');
     setCaughtQuality(OPTIONS_I18N[langRef.current].video[0][0]);
+    setCaughtPreviewActive(false);
+    setCaughtPreviewMode('video');
     setIsResolvingCaught(true);
 
     fetchServerInfo(cleanTarget)
@@ -1191,12 +1313,15 @@ export default function App() {
                 duration: real.duration,
                 platform: isEn ? real.platformEn : real.platformAr,
                 thumbnail: real.thumbnail,
+                previewUrl: real.previewUrl,
+                embedUrl: real.embedUrl,
                 videoOptions: real.videoOptions,
                 audioOptions: real.audioOptions,
                 source,
               }
             : prev
         );
+        setCaughtPreviewMode(real.previewUrl ? 'video' : real.embedUrl ? 'embed' : 'none');
         if (real.videoOptions.length > 0) {
           setCaughtQuality(real.videoOptions[0].key);
         }
@@ -1491,12 +1616,13 @@ export default function App() {
     return OPTIONS[mode];
   };
 
-  // Quality label lookup
-  const getQualityLabel = (val: string) => {
+  // Quality label & selected option lookup
+  const getQualityTuple = (val: string): [string, string, string, string] => {
     const opts = activeQualityList();
-    const found = opts.find((o) => o[0] === val);
-    return found ? found[1] : opts[0][1];
+    return opts.find((o) => o[0] === val) || opts[0];
   };
+
+  const getQualityLabel = (val: string) => getQualityTuple(val)[1];
 
   // Mode Change
   const handleModeChange = (newMode: 'video' | 'audio') => {
@@ -1521,6 +1647,8 @@ export default function App() {
     const cleanUrl = extractUrlFromText(raw) || raw;
     setUrl(cleanUrl);
 
+    setMainPreviewActive(false);
+    setMainPreviewMode('video');
     setIsFetching(true);
     const info = await fetchServerInfo(cleanUrl);
     setIsFetching(false);
@@ -1536,10 +1664,13 @@ export default function App() {
       author: info.author,
       duration: info.duration,
       thumbnail: info.thumbnail,
+      previewUrl: info.previewUrl,
+      embedUrl: info.embedUrl,
       resolvedUrl: info.url,
       videoOptions: info.videoOptions,
       audioOptions: info.audioOptions,
     });
+    setMainPreviewMode(info.previewUrl ? 'video' : info.embedUrl ? 'embed' : 'none');
     const list = mode === 'video' ? info.videoOptions : info.audioOptions;
     if (list && list.length > 0) {
       setQv(list[0].key);
@@ -1950,15 +2081,20 @@ export default function App() {
       author: caughtVideo.author,
       duration: caughtVideo.duration,
       thumbnail: caughtVideo.thumbnail,
+      previewUrl: caughtVideo.previewUrl,
+      embedUrl: caughtVideo.embedUrl,
       resolvedUrl: caughtVideo.url,
       videoOptions: caughtVideo.videoOptions,
       audioOptions: caughtVideo.audioOptions,
     };
     setUrl(caughtVideo.url);
     setCustomVideoMeta(nextMeta);
+    setMainPreviewActive(false);
+    setMainPreviewMode(caughtVideo.previewUrl ? 'video' : caughtVideo.embedUrl ? 'embed' : 'none');
     setIsRevealed(true);
     setMode(caughtMode);
     setQv(caughtQuality);
+    setCaughtPreviewActive(false);
     setCaughtVideo(null);
     switchTab('D');
     startRealDownload(caughtVideo.url, caughtMode === 'audio', caughtQuality, nextMeta);
@@ -1973,13 +2109,18 @@ export default function App() {
       author: caughtVideo.author,
       duration: caughtVideo.duration,
       thumbnail: caughtVideo.thumbnail,
+      previewUrl: caughtVideo.previewUrl,
+      embedUrl: caughtVideo.embedUrl,
       resolvedUrl: caughtVideo.url,
       videoOptions: caughtVideo.videoOptions,
       audioOptions: caughtVideo.audioOptions,
     });
+    setMainPreviewActive(false);
+    setMainPreviewMode(caughtVideo.previewUrl ? 'video' : caughtVideo.embedUrl ? 'embed' : 'none');
     setIsRevealed(true);
     setMode(caughtMode);
     setQv(caughtQuality);
+    setCaughtPreviewActive(false);
     setCaughtVideo(null);
     switchTab('D');
   };
@@ -2240,6 +2381,8 @@ export default function App() {
                     onClick={() => {
                       setUrl('');
                       setCustomVideoMeta(null);
+                      setMainPreviewActive(false);
+                      setMainPreviewMode('video');
                       setIsRevealed(false);
                     }}
                   >
@@ -2269,26 +2412,123 @@ export default function App() {
             </div>
             <div className={`reveal ${isRevealed ? 'open' : ''}`} id="rv">
               <div>
-                <div className="prev">
-                  <div
-                    className="thumb"
-                    aria-hidden="true"
-                    style={
-                      customVideoMeta?.thumbnail
-                        ? {
-                            backgroundImage: `url(${customVideoMeta.thumbnail})`,
-                            backgroundSize: 'cover',
-                            backgroundPosition: 'center',
+                <div className="pv-wrap">
+                  <div className="pv-head-row">
+                    <div className="pv-head-meta">
+                      <b>{currentVideoTitle}</b>
+                      <span>
+                        {currentVideoAuthor} · {currentVideoDuration}
+                      </span>
+                    </div>
+                    {(customVideoMeta?.previewUrl || customVideoMeta?.embedUrl) && (
+                      <button
+                        type="button"
+                        className="ghost pv-toggle-btn"
+                        onClick={() => {
+                          if (mainPreviewActive) {
+                            setMainPreviewActive(false);
+                          } else {
+                            setMainPreviewMode(
+                              customVideoMeta?.previewUrl
+                                ? 'video'
+                                : customVideoMeta?.embedUrl
+                                  ? 'embed'
+                                  : 'none'
+                            );
+                            setMainPreviewActive(true);
                           }
-                        : undefined
-                    }
-                  ></div>
-                  <div className="pm">
-                    <b>{currentVideoTitle}</b>
-                    <span>
-                      {currentVideoAuthor} · {currentVideoDuration}
-                    </span>
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                          {mainPreviewActive ? (
+                            <path d="M6 6h12v12H6z" />
+                          ) : (
+                            <path d="M8 5v14l11-7z" />
+                          )}
+                        </svg>
+                        <span>{mainPreviewActive ? t.hidePreviewBtn : t.previewVideoBtn}</span>
+                      </button>
+                    )}
                   </div>
+
+                  {(() => {
+                    const playableVideo = resolvePreviewSrc(customVideoMeta?.previewUrl);
+                    const embedSrc = customVideoMeta?.embedUrl;
+                    if (!customVideoMeta?.thumbnail && !playableVideo && !embedSrc) return null;
+
+                    if (mainPreviewActive) {
+                      if (mainPreviewMode === 'video' && playableVideo) {
+                        return (
+                          <div className="pv-player-box">
+                            <video
+                              className="pv-video"
+                              src={playableVideo}
+                              poster={customVideoMeta?.thumbnail}
+                              controls
+                              autoPlay
+                              playsInline
+                              preload="metadata"
+                              onError={() => {
+                                if (embedSrc) setMainPreviewMode('embed');
+                                else setMainPreviewMode('none');
+                              }}
+                            />
+                          </div>
+                        );
+                      }
+                      if (mainPreviewMode === 'embed' && embedSrc) {
+                        return (
+                          <div className="pv-player-box">
+                            <iframe
+                              className="pv-embed"
+                              src={embedSrc}
+                              title={currentVideoTitle}
+                              allow="autoplay; encrypted-media; picture-in-picture"
+                              allowFullScreen
+                              referrerPolicy="strict-origin-when-cross-origin"
+                            />
+                          </div>
+                        );
+                      }
+                      return <p className="pv-unavail">{t.videoPreviewUnavailable}</p>;
+                    }
+
+                    return (
+                      <div className="pv-player-box">
+                        <button
+                          type="button"
+                          className="pv-poster-btn"
+                          onClick={() => {
+                            if (playableVideo) {
+                              setMainPreviewMode('video');
+                              setMainPreviewActive(true);
+                            } else if (embedSrc) {
+                              setMainPreviewMode('embed');
+                              setMainPreviewActive(true);
+                            }
+                          }}
+                          aria-label={t.previewVideoBtn}
+                        >
+                          {customVideoMeta?.thumbnail && (
+                            <img
+                              src={customVideoMeta.thumbnail}
+                              alt={currentVideoTitle}
+                              referrerPolicy="no-referrer"
+                            />
+                          )}
+                          <span className="pv-poster-scrim" aria-hidden="true"></span>
+                          {(playableVideo || embedSrc) && (
+                            <span className="pv-play-core">
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M8 5v14l11-7z" />
+                              </svg>
+                              <span>{t.previewVideoBtn}</span>
+                            </span>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -2329,7 +2569,12 @@ export default function App() {
                 aria-labelledby="qLbl ddVal"
                 onClick={() => setDdOpen(!ddOpen)}
               >
-                <span id="ddVal">{getQualityLabel(qv)}</span>
+                <span className="dd-btn-val" id="ddVal">
+                  <span>{getQualityLabel(qv)}</span>
+                  {getQualityTuple(qv)[3] !== '—' && (
+                    <span className="dd-size">{getQualityTuple(qv)[3]}</span>
+                  )}
+                </span>
                 <svg
                   width="18"
                   height="18"
@@ -2345,7 +2590,7 @@ export default function App() {
               </button>
               <div className="dd-list">
                 <ul id="ddList" role="listbox" aria-labelledby="qLbl">
-                  {activeQualityList().map(([v, labelText]) => (
+                  {activeQualityList().map(([v, labelText, , sizeText]) => (
                     <li
                       key={v}
                       role="option"
@@ -2357,7 +2602,10 @@ export default function App() {
                         setDdOpen(false);
                       }}
                     >
-                      <span>{labelText}</span>
+                      <span className="dd-opt-main">
+                        <span>{labelText}</span>
+                        {sizeText && sizeText !== '—' && <span className="dd-size">{sizeText}</span>}
+                      </span>
                       <svg
                         width="18"
                         height="18"
@@ -2378,6 +2626,48 @@ export default function App() {
             <p className="hint" id="hint">
               {HINTS[mode]}
             </p>
+
+            {(() => {
+              const selectedTuple = getQualityTuple(qv);
+              const rawOpts = mode === 'video' ? customVideoMeta?.videoOptions : customVideoMeta?.audioOptions;
+              const matchedOpt = rawOpts?.find((o) => o.key === qv) || rawOpts?.[0];
+              const predictedName = customVideoMeta
+                ? buildPredictedFilename(
+                    customVideoMeta.title,
+                    mode === 'audio',
+                    qv,
+                    matchedOpt?.directUrl
+                  )
+                : mode === 'audio'
+                  ? `tanzeelati-audio.${qv === 'm4a' ? 'm4a' : qv === 'opus' ? 'opus' : 'mp3'}`
+                  : 'tanzeelati-video.mp4';
+              const realSize =
+                customVideoMeta && selectedTuple[3] && selectedTuple[3] !== '—'
+                  ? selectedTuple[3]
+                  : customVideoMeta
+                    ? '—'
+                    : t.sizeAfterFetch;
+
+              return (
+                <div className="file-summary" aria-label={t.outputPreviewTitle}>
+                  <div className="file-summary-title">{t.outputPreviewTitle}</div>
+                  <div className="file-summary-row">
+                    <span className="k">{t.outputFileNameLabel}</span>
+                    <span className="v" dir="auto" title={predictedName}>
+                      {predictedName}
+                    </span>
+                  </div>
+                  <div className="file-summary-row">
+                    <span className="k">{t.outputFormatLabel}</span>
+                    <span className="v">{selectedTuple[1]}</span>
+                  </div>
+                  <div className="file-summary-row">
+                    <span className="k">{t.outputRealSizeLabel}</span>
+                    <span className="v size">{realSize}</span>
+                  </div>
+                </div>
+              );
+            })()}
           </section>
 
           <button
@@ -3309,7 +3599,10 @@ export default function App() {
       {caughtVideo && (
         <div
           className="sheet-backdrop"
-          onClick={() => setCaughtVideo(null)}
+          onClick={() => {
+            setCaughtPreviewActive(false);
+            setCaughtVideo(null);
+          }}
           role="dialog"
           aria-modal="true"
           aria-labelledby="caughtSheetTitle"
@@ -3333,39 +3626,133 @@ export default function App() {
               <button
                 type="button"
                 className="ghost sheet-close"
-                onClick={() => setCaughtVideo(null)}
+                onClick={() => {
+                  setCaughtPreviewActive(false);
+                  setCaughtVideo(null);
+                }}
               >
                 {t.close}
               </button>
             </div>
 
-            {/* Video preview card */}
+            {/* Real playable video preview card so user can verify exact source video */}
             <div className="card" style={{ padding: '12px', marginBottom: '14px' }}>
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <div
-                  className="thumb"
-                  style={{
-                    width: '92px',
-                    height: '54px',
-                    ...(caughtVideo.thumbnail
-                      ? {
-                          backgroundImage: `url(${caughtVideo.thumbnail})`,
-                          backgroundSize: 'cover',
-                          backgroundPosition: 'center',
-                        }
-                      : {}),
-                  }}
-                  aria-hidden="true"
-                ></div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <b style={{ fontSize: '14px', display: 'block', lineHeight: '1.35', wordBreak: 'break-word' }}>
-                    {caughtVideo.title}
-                  </b>
-                  <span className="sub" style={{ fontSize: '12.5px', marginTop: '3px', display: 'block' }}>
+              <div className="pv-head-row" style={{ marginBottom: '10px' }}>
+                <div className="pv-head-meta">
+                  <b style={{ fontSize: '14px' }}>{caughtVideo.title}</b>
+                  <span style={{ fontSize: '12.5px' }}>
                     {isResolvingCaught ? t.resolvingQualities : caughtVideo.author}
                   </span>
                 </div>
+                {(caughtVideo.previewUrl || caughtVideo.embedUrl) && (
+                  <button
+                    type="button"
+                    className="ghost pv-toggle-btn"
+                    style={{ minHeight: '38px', padding: '6px 12px', fontSize: '12.5px' }}
+                    onClick={() => {
+                      if (caughtPreviewActive) {
+                        setCaughtPreviewActive(false);
+                      } else {
+                        setCaughtPreviewMode(
+                          caughtVideo.previewUrl
+                            ? 'video'
+                            : caughtVideo.embedUrl
+                              ? 'embed'
+                              : 'none'
+                        );
+                        setCaughtPreviewActive(true);
+                      }
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      {caughtPreviewActive ? (
+                        <path d="M6 6h12v12H6z" />
+                      ) : (
+                        <path d="M8 5v14l11-7z" />
+                      )}
+                    </svg>
+                    <span>{caughtPreviewActive ? t.hidePreviewBtn : t.previewVideoBtn}</span>
+                  </button>
+                )}
               </div>
+
+              {(() => {
+                const playable = resolvePreviewSrc(caughtVideo.previewUrl);
+                const embedSrc = caughtVideo.embedUrl;
+                if (caughtPreviewActive) {
+                  if (caughtPreviewMode === 'video' && playable) {
+                    return (
+                      <div className="pv-player-box">
+                        <video
+                          className="pv-video"
+                          src={playable}
+                          poster={caughtVideo.thumbnail}
+                          controls
+                          autoPlay
+                          playsInline
+                          preload="metadata"
+                          onError={() => {
+                            if (embedSrc) setCaughtPreviewMode('embed');
+                            else setCaughtPreviewMode('none');
+                          }}
+                        />
+                      </div>
+                    );
+                  }
+                  if (caughtPreviewMode === 'embed' && embedSrc) {
+                    return (
+                      <div className="pv-player-box">
+                        <iframe
+                          className="pv-embed"
+                          src={embedSrc}
+                          title={caughtVideo.title}
+                          allow="autoplay; encrypted-media; picture-in-picture"
+                          allowFullScreen
+                          referrerPolicy="strict-origin-when-cross-origin"
+                        />
+                      </div>
+                    );
+                  }
+                  return <p className="pv-unavail">{t.videoPreviewUnavailable}</p>;
+                }
+
+                return (
+                  <div className="pv-player-box">
+                    <button
+                      type="button"
+                      className="pv-poster-btn"
+                      onClick={() => {
+                        if (playable) {
+                          setCaughtPreviewMode('video');
+                          setCaughtPreviewActive(true);
+                        } else if (embedSrc) {
+                          setCaughtPreviewMode('embed');
+                          setCaughtPreviewActive(true);
+                        }
+                      }}
+                      aria-label={t.previewVideoBtn}
+                    >
+                      {caughtVideo.thumbnail && (
+                        <img
+                          src={caughtVideo.thumbnail}
+                          alt={caughtVideo.title}
+                          referrerPolicy="no-referrer"
+                        />
+                      )}
+                      <span className="pv-poster-scrim" aria-hidden="true"></span>
+                      {(playable || embedSrc) && (
+                        <span className="pv-play-core">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <path d="M8 5v14l11-7z" />
+                          </svg>
+                          <span>{t.previewVideoBtn}</span>
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                );
+              })()}
+
               <div
                 style={{
                   marginTop: '10px',
@@ -3459,8 +3846,47 @@ export default function App() {
               </div>
             </div>
 
+            {/* Output File Preview Summary inside Share Sheet */}
+            {(() => {
+              const rawList = caughtMode === 'video' ? caughtVideo.videoOptions : caughtVideo.audioOptions;
+              const chosenServer = rawList?.find((o) => o.key === caughtQuality) || rawList?.[0];
+              const fallbackTuple = OPTIONS[caughtMode].find((o) => o[0] === caughtQuality) || OPTIONS[caughtMode][0];
+              const chosenLabel = chosenServer
+                ? lang === 'ar'
+                  ? chosenServer.labelAr
+                  : chosenServer.labelEn
+                : fallbackTuple[1];
+              const chosenSize = chosenServer ? chosenServer.sizeText : isResolvingCaught ? '…' : '—';
+              const predictedName = buildPredictedFilename(
+                caughtVideo.title,
+                caughtMode === 'audio',
+                caughtQuality,
+                chosenServer?.directUrl
+              );
+
+              return (
+                <div className="file-summary" aria-label={t.outputPreviewTitle}>
+                  <div className="file-summary-title">{t.outputPreviewTitle}</div>
+                  <div className="file-summary-row">
+                    <span className="k">{t.outputFileNameLabel}</span>
+                    <span className="v" dir="auto" title={predictedName}>
+                      {predictedName}
+                    </span>
+                  </div>
+                  <div className="file-summary-row">
+                    <span className="k">{t.outputFormatLabel}</span>
+                    <span className="v">{chosenLabel}</span>
+                  </div>
+                  <div className="file-summary-row">
+                    <span className="k">{t.outputRealSizeLabel}</span>
+                    <span className="v size">{chosenSize}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Action Buttons */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '14px' }}>
               <button
                 type="button"
                 className="go"

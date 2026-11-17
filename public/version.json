@@ -1,27 +1,27 @@
 {
-  "version": "1.2.3",
-  "build": 6,
+  "version": "1.2.4",
+  "build": 7,
   "date": "2026-11-17",
-  "title": "المشاركة المباشرة من التطبيقات + واجهة أبسط بنفس خط وهوية إنجازاتي",
-  "title_ar": "المشاركة المباشرة من التطبيقات + واجهة أبسط بنفس خط وهوية إنجازاتي",
-  "title_en": "Direct Share Sheet Integration + Cleaner Injazati Visual Identity",
+  "title": "أحجام حقيقية للملفات + معاينة تشغيل الفيديو قبل التحميل",
+  "title_ar": "أحجام حقيقية للملفات + معاينة تشغيل الفيديو قبل التحميل",
+  "title_en": "Real File Sizes + Live Video & Output Preview",
   "features": [
-    "المشاركة المباشرة من يوتيوب وتيك توك وجميع التطبيقات مع فتح نافذة فورية لاختيار فيديو أو صوت وتحديد الجودة",
-    "توحيد الخط الافتراضي وشاشة التحميل مع نفس الهوية البصرية لتطبيق إنجازاتي",
-    "تبسيط واجهة التحميل وإزالة المشتتات وإصلاح محاذاة أزرار اللصق والمسح داخل حقل الرابط",
-    "تحسين مقاس أيقونة التطبيق وتناسق الدائرة الداخلية وتسريع استجابة التشغيل"
+    "حساب وعرض الحجم الفعلي الحقيقي للفيديو والصوت لكل جودة قبل التنزيل بدون أي أرقام تقديرية وهمية",
+    "مشغّل معاينة حقيقي للفيديو داخل التطبيق لتتأكد بنفسك أنه الفيديو المطلوب قبل تحميل الفيديو أو استخراج الصوت",
+    "ملخص معاينة فوري لما سيُحفظ على جهازك يوضح اسم الملف الدقيق والصيغة والحجم الفعلي لكل اختيار",
+    "تكامل كامل مع المشاركة المباشرة من يوتيوب والتطبيقات لاختيار الفيديو أو الصوت والجودة فوراً"
   ],
   "features_ar": [
-    "المشاركة المباشرة من يوتيوب وتيك توك وجميع التطبيقات مع فتح نافذة فورية لاختيار فيديو أو صوت وتحديد الجودة",
-    "توحيد الخط الافتراضي وشاشة التحميل مع نفس الهوية البصرية لتطبيق إنجازاتي",
-    "تبسيط واجهة التحميل وإزالة المشتتات وإصلاح محاذاة أزرار اللصق والمسح داخل حقل الرابط",
-    "تحسين مقاس أيقونة التطبيق وتناسق الدائرة الداخلية وتسريع استجابة التشغيل"
+    "حساب وعرض الحجم الفعلي الحقيقي للفيديو والصوت لكل جودة قبل التنزيل بدون أي أرقام تقديرية وهمية",
+    "مشغّل معاينة حقيقي للفيديو داخل التطبيق لتتأكد بنفسك أنه الفيديو المطلوب قبل تحميل الفيديو أو استخراج الصوت",
+    "ملخص معاينة فوري لما سيُحفظ على جهازك يوضح اسم الملف الدقيق والصيغة والحجم الفعلي لكل اختيار",
+    "تكامل كامل مع المشاركة المباشرة من يوتيوب والتطبيقات لاختيار الفيديو أو الصوت والجودة فوراً"
   ],
   "features_en": [
-    "Android Share Sheet integration: share links from YouTube or any social app directly to Tanzeelati and pick Video/Audio & quality immediately",
-    "Unified default system font across both the Splash screen and app UI to match Injazati's visual identity",
-    "Distraction-free download UI layout with proper RTL/LTR URL paste & clear button alignment",
-    "Refined app launcher icon sizing and faster server startup reliability"
+    "Real exact byte sizes probed for every Video and Audio quality option instead of placeholder estimates",
+    "Interactive in-app video preview player (with automatic embed fallback) so you can watch and verify the exact source video before downloading",
+    "Live saved-to-device output preview showing the exact filename, extension, format, and real file size for your selection",
+    "Seamless Share Sheet integration from YouTube and social apps with immediate format & quality confirmation"
   ],
   "apkUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest/download/Tanzeelati-Debug.apk",
   "releaseUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest"

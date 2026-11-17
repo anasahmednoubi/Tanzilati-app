@@ -937,6 +937,177 @@ button.ghost {
   font-size: 14px;
 }
 
+/* Interactive Playable Video Preview */
+.pv-wrap {
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pv-player-box {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0d0d12;
+  border: 1px solid var(--line);
+}
+
+.pv-poster-btn {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: linear-gradient(135deg, #0f2922, #181822);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.pv-poster-btn img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.88;
+}
+
+.pv-poster-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.12) 0%, rgba(0, 0, 0, 0.52) 100%);
+}
+
+.pv-play-core {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(15, 15, 20, 0.78);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.pv-video,
+.pv-embed {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border: 0;
+  background: #000;
+}
+
+.pv-video {
+  object-fit: contain;
+}
+
+.pv-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pv-head-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.pv-head-meta b {
+  display: block;
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.38;
+  word-break: break-word;
+}
+
+.pv-head-meta span {
+  display: block;
+  margin-top: 3px;
+  color: var(--mute);
+  font-size: 13px;
+}
+
+.pv-toggle-btn {
+  flex: none;
+  min-height: 44px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pv-unavail {
+  font-size: 12.5px;
+  color: var(--mute);
+  margin: 0;
+  line-height: 1.45;
+}
+
+/* Output File Preview Summary (What will actually be saved) */
+.file-summary {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.file-summary-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--acc);
+}
+
+.file-summary-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13.5px;
+}
+
+.file-summary-row .k {
+  color: var(--mute);
+  flex: none;
+}
+
+.file-summary-row .v {
+  color: var(--text);
+  font-weight: 600;
+  text-align: end;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-summary-row .v.size {
+  color: var(--acc);
+  font-weight: 700;
+  direction: ltr;
+}
+
 .mt {
   display: flex;
   gap: 6px;
@@ -1043,6 +1214,25 @@ button.ghost {
   transition-delay: 0s;
 }
 
+.dd-btn-val {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dd-btn-val .dd-size,
+.dd-list li .dd-size {
+  flex: none;
+  color: var(--acc);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+}
+
 .dd-list li {
   display: flex;
   align-items: center;
@@ -1052,6 +1242,15 @@ button.ghost {
   cursor: pointer;
   font-size: 15px;
   transition: background-color 0.2s;
+}
+
+.dd-list li .dd-opt-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .dd-list li:hover {

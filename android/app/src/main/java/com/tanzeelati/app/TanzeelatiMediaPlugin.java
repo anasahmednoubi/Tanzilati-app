@@ -501,19 +501,27 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 String usedUA = clientCfg[2];
 
                 if (!bestAudioUrl.isEmpty()) {
+                    if (bestAudioSize <= 0) {
+                        bestAudioSize = probeContentLength(bestAudioUrl, usedUA);
+                    }
                     for (JSONObject f : h264Adaptive) {
                         int h = f.optInt("height", 0);
                         if (h < 240 || seenH.contains(h)) continue;
                         if (h != 1080 && h != 720 && h != 480 && h != 360) continue;
                         seenH.add(h);
-                        long totalBytes = parseLongSafe(f.optString("contentLength", "0")) + bestAudioSize;
+                        long vBytes = parseLongSafe(f.optString("contentLength", "0"));
+                        if (vBytes <= 0) {
+                            vBytes = probeContentLength(f.optString("url"), usedUA);
+                        }
+                        long totalBytes = (vBytes > 0 && bestAudioSize > 0) ? (vBytes + bestAudioSize) : vBytes;
                         JSObject opt = new JSObject();
                         opt.put("key", String.valueOf(h));
                         opt.put("labelAr", h >= 1080 ? h + "p (Full HD)" : h == 720 ? "720p (HD)" : h + "p");
                         opt.put("labelEn", h >= 1080 ? h + "p (Full HD)" : h == 720 ? "720p (HD)" : h + "p");
                         opt.put("descAr", h >= 720 ? "MP4 · عالي الوضوح" : "MP4 · موفر للبيانات");
                         opt.put("descEn", h >= 720 ? "MP4 · High Definition" : "MP4 · Data Saver");
-                        opt.put("sizeText", totalBytes > 0 ? formatBytes(totalBytes) : h + "p");
+                        opt.put("sizeText", totalBytes > 0 ? formatBytes(totalBytes, true) : "—");
+                        if (totalBytes > 0) opt.put("sizeBytes", totalBytes);
                         opt.put("height", h);
                         opt.put("directUrl", f.optString("url"));
                         opt.put("audioUrl", bestAudioUrl);
@@ -523,13 +531,17 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 }
 
                 if (!progUrl.isEmpty() && !seenH.contains(progHeight)) {
+                    if (progSize <= 0) {
+                        progSize = probeContentLength(progUrl, usedUA);
+                    }
                     JSObject opt = new JSObject();
                     opt.put("key", String.valueOf(progHeight));
                     opt.put("labelAr", progHeight + "p (MP4 مباشر)");
                     opt.put("labelEn", progHeight + "p (Direct MP4)");
                     opt.put("descAr", "MP4 · صوت وصورة مدمجين");
                     opt.put("descEn", "MP4 · Video + Audio");
-                    opt.put("sizeText", progSize > 0 ? formatBytes(progSize) : progHeight + "p");
+                    opt.put("sizeText", progSize > 0 ? formatBytes(progSize, true) : "—");
+                    if (progSize > 0) opt.put("sizeBytes", progSize);
                     opt.put("height", progHeight);
                     opt.put("directUrl", progUrl);
                     opt.put("userAgent", usedUA);
@@ -546,7 +558,8 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 bestOpt.put("labelEn", "Best Available (" + top.optInt("height", 360) + "p)");
                 bestOpt.put("descAr", "MP4 · أعلى دقة صوت وصورة");
                 bestOpt.put("descEn", "MP4 · Highest Audio & Video");
-                bestOpt.put("sizeText", top.optString("sizeText", "MP4"));
+                bestOpt.put("sizeText", top.optString("sizeText", "—"));
+                if (top.has("sizeBytes")) bestOpt.put("sizeBytes", top.optLong("sizeBytes"));
                 bestOpt.put("height", top.optInt("height", 360));
                 bestOpt.put("directUrl", top.optString("directUrl"));
                 if (top.has("audioUrl")) bestOpt.put("audioUrl", top.optString("audioUrl"));
@@ -559,7 +572,7 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 }
 
                 String effectiveAudio = !bestAudioUrl.isEmpty() ? bestAudioUrl : progUrl;
-                JSArray audioOpts = buildAudioOptions(durSec, effectiveAudio, usedUA);
+                JSArray audioOpts = buildAudioOptions(durSec, effectiveAudio, usedUA, bestAudioSize);
 
                 JSObject out = new JSObject();
                 out.put("url", originalUrl);
@@ -575,6 +588,8 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 out.put("audioOptions", audioOpts);
                 out.put("fallbackStreamUrl", !progUrl.isEmpty() ? progUrl : bestOpt.optString("directUrl"));
                 out.put("fallbackAudioUrl", effectiveAudio);
+                out.put("previewUrl", !progUrl.isEmpty() ? progUrl : bestOpt.optString("directUrl"));
+                out.put("embedUrl", "https://www.youtube-nocookie.com/embed/" + videoId + "?rel=0&playsinline=1");
                 return out;
             } catch (Exception ignored) {
             } finally {
@@ -600,7 +615,7 @@ public class TanzeelatiMediaPlugin extends Plugin {
 
                 String title = data.optString("title", "YouTube Video");
                 String author = data.optString("uploader", "YouTube");
-                int dur = data.optInt("duration", 120);
+                int dur = data.optInt("duration", 0);
                 String thumb = data.optString("thumbnailUrl", "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg");
 
                 JSONArray vStreams = data.optJSONArray("videoStreams");
@@ -625,13 +640,17 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 }
                 if (progUrl.isEmpty()) continue;
 
+                long progBytes = probeContentLength(progUrl, MOBILE_CHROME_UA);
+                long audBytes = !bestAudio.isEmpty() ? probeContentLength(bestAudio, MOBILE_CHROME_UA) : 0L;
+
                 JSObject opt = new JSObject();
                 opt.put("key", "best");
                 opt.put("labelAr", "أفضل جودة متاحة (MP4)");
                 opt.put("labelEn", "Best Available (MP4)");
                 opt.put("descAr", "MP4 · مباشر");
                 opt.put("descEn", "MP4 · Direct");
-                opt.put("sizeText", "MP4");
+                opt.put("sizeText", progBytes > 0 ? formatBytes(progBytes, true) : "—");
+                if (progBytes > 0) opt.put("sizeBytes", progBytes);
                 opt.put("directUrl", progUrl);
                 opt.put("userAgent", MOBILE_CHROME_UA);
 
@@ -649,9 +668,11 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 out.put("platformEn", "YouTube");
                 out.put("engine", "piped");
                 out.put("videoOptions", vOpts);
-                out.put("audioOptions", buildAudioOptions(dur, !bestAudio.isEmpty() ? bestAudio : progUrl, MOBILE_CHROME_UA));
+                out.put("audioOptions", buildAudioOptions(dur, !bestAudio.isEmpty() ? bestAudio : progUrl, MOBILE_CHROME_UA, audBytes));
                 out.put("fallbackStreamUrl", progUrl);
                 out.put("fallbackAudioUrl", !bestAudio.isEmpty() ? bestAudio : progUrl);
+                out.put("previewUrl", progUrl);
+                out.put("embedUrl", "https://www.youtube-nocookie.com/embed/" + videoId + "?rel=0&playsinline=1");
                 return out;
             } catch (Exception ignored) {
             } finally {
@@ -675,13 +696,21 @@ public class TanzeelatiMediaPlugin extends Plugin {
             String sdUrl = d.optString("play", hdUrl);
             if (hdUrl.isEmpty() && sdUrl.isEmpty()) return null;
 
-            int dur = d.optInt("duration", 30);
+            int dur = d.optInt("duration", 0);
             String title = d.optString("title", "TikTok Video");
             if (title.trim().isEmpty()) title = "TikTok Video";
             JSONObject authorObj = d.optJSONObject("author");
             String author = authorObj != null ? authorObj.optString("nickname", authorObj.optString("unique_id", "TikTok")) : "TikTok";
             String cover = d.optString("cover", d.optString("origin_cover", ""));
-            String musicUrl = d.optString("music", hdUrl);
+            String musicUrl = d.optString("music", "");
+
+            long hdBytes = d.optLong("hd_size", d.optLong("size", 0));
+            if (hdBytes <= 0) hdBytes = probeContentLength(hdUrl, MOBILE_CHROME_UA);
+            long sdBytes = d.optLong("size", 0);
+            if (sdBytes <= 0 && !sdUrl.isEmpty() && !sdUrl.equals(hdUrl)) {
+                sdBytes = probeContentLength(sdUrl, MOBILE_CHROME_UA);
+            }
+            long musicBytes = !musicUrl.isEmpty() ? probeContentLength(musicUrl, MOBILE_CHROME_UA) : 0L;
 
             JSArray vOpts = new JSArray();
             JSObject bestOpt = new JSObject();
@@ -690,7 +719,8 @@ public class TanzeelatiMediaPlugin extends Plugin {
             bestOpt.put("labelEn", "Best Quality (No Watermark)");
             bestOpt.put("descAr", "MP4 · HD أصلي");
             bestOpt.put("descEn", "MP4 · Original HD");
-            bestOpt.put("sizeText", formatBytes(d.optLong("hd_size", d.optLong("size", 0))));
+            bestOpt.put("sizeText", hdBytes > 0 ? formatBytes(hdBytes, true) : "—");
+            if (hdBytes > 0) bestOpt.put("sizeBytes", hdBytes);
             bestOpt.put("directUrl", hdUrl);
             bestOpt.put("userAgent", MOBILE_CHROME_UA);
             vOpts.put(bestOpt);
@@ -702,12 +732,14 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 sdOpt.put("labelEn", "Standard Quality (Compact)");
                 sdOpt.put("descAr", "MP4 · بدون علامة مائية");
                 sdOpt.put("descEn", "MP4 · No Watermark");
-                sdOpt.put("sizeText", formatBytes(d.optLong("size", 0)));
+                sdOpt.put("sizeText", sdBytes > 0 ? formatBytes(sdBytes, true) : "—");
+                if (sdBytes > 0) sdOpt.put("sizeBytes", sdBytes);
                 sdOpt.put("directUrl", sdUrl);
                 sdOpt.put("userAgent", MOBILE_CHROME_UA);
                 vOpts.put(sdOpt);
             }
 
+            String effectiveAudio = !musicUrl.isEmpty() ? musicUrl : hdUrl;
             JSObject out = new JSObject();
             out.put("url", targetUrl);
             out.put("title", title);
@@ -719,9 +751,10 @@ public class TanzeelatiMediaPlugin extends Plugin {
             out.put("platformEn", "TikTok");
             out.put("engine", "tikwm");
             out.put("videoOptions", vOpts);
-            out.put("audioOptions", buildAudioOptions(dur, !musicUrl.isEmpty() ? musicUrl : hdUrl, MOBILE_CHROME_UA));
+            out.put("audioOptions", buildAudioOptions(dur, effectiveAudio, MOBILE_CHROME_UA, musicBytes));
             out.put("fallbackStreamUrl", hdUrl);
-            out.put("fallbackAudioUrl", !musicUrl.isEmpty() ? musicUrl : hdUrl);
+            out.put("fallbackAudioUrl", effectiveAudio);
+            out.put("previewUrl", !sdUrl.isEmpty() ? sdUrl : hdUrl);
             return out;
         } catch (Exception ignored) {
             return null;
@@ -760,7 +793,8 @@ public class TanzeelatiMediaPlugin extends Plugin {
                             if (!mp4s.isEmpty()) bestUrl = mp4s.get(0).optString("url");
                         }
                         if (!bestUrl.isEmpty()) {
-                            int dur = v.optInt("duration", 30);
+                            int dur = v.optInt("duration", 0);
+                            long bestBytes = probeContentLength(bestUrl, MOBILE_CHROME_UA);
                             JSArray vOpts = new JSArray();
                             JSObject best = new JSObject();
                             best.put("key", "best");
@@ -768,7 +802,8 @@ public class TanzeelatiMediaPlugin extends Plugin {
                             best.put("labelEn", "Best Available Quality (MP4)");
                             best.put("descAr", "MP4 · أعلى دقة");
                             best.put("descEn", "MP4 · Highest Resolution");
-                            best.put("sizeText", "MP4");
+                            best.put("sizeText", bestBytes > 0 ? formatBytes(bestBytes, true) : "—");
+                            if (bestBytes > 0) best.put("sizeBytes", bestBytes);
                             best.put("directUrl", bestUrl);
                             best.put("userAgent", MOBILE_CHROME_UA);
                             vOpts.put(best);
@@ -776,15 +811,18 @@ public class TanzeelatiMediaPlugin extends Plugin {
                             String[] keys = { "720", "480", "360" };
                             for (int i = 0; i < Math.min(3, mp4s.size()); i++) {
                                 JSONObject vr = mp4s.get(i);
+                                String vrUrl = vr.optString("url");
                                 int kbps = Math.round(vr.optInt("bitrate", 0) / 1000f);
+                                long vrBytes = i == 0 && bestBytes > 0 ? bestBytes : probeContentLength(vrUrl, MOBILE_CHROME_UA);
                                 JSObject o = new JSObject();
                                 o.put("key", keys[i]);
                                 o.put("labelAr", i == 0 ? "جودة عالية (HD)" : i == 1 ? "جودة متوسطة" : "حجم أصغر");
                                 o.put("labelEn", i == 0 ? "High Quality (HD)" : i == 1 ? "Medium Quality" : "Compact Size");
                                 o.put("descAr", kbps > 0 ? "MP4 · " + kbps + " kbps" : "MP4");
                                 o.put("descEn", kbps > 0 ? "MP4 · " + kbps + " kbps" : "MP4");
-                                o.put("sizeText", "MP4");
-                                o.put("directUrl", vr.optString("url"));
+                                o.put("sizeText", vrBytes > 0 ? formatBytes(vrBytes, true) : "—");
+                                if (vrBytes > 0) o.put("sizeBytes", vrBytes);
+                                o.put("directUrl", vrUrl);
                                 o.put("userAgent", MOBILE_CHROME_UA);
                                 vOpts.put(o);
                             }
@@ -805,9 +843,10 @@ public class TanzeelatiMediaPlugin extends Plugin {
                             out.put("platformEn", "X Platform");
                             out.put("engine", "fxtwitter");
                             out.put("videoOptions", vOpts);
-                            out.put("audioOptions", buildAudioOptions(dur, bestUrl, MOBILE_CHROME_UA));
+                            out.put("audioOptions", buildAudioOptions(dur, bestUrl, MOBILE_CHROME_UA, 0L));
                             out.put("fallbackStreamUrl", bestUrl);
                             out.put("fallbackAudioUrl", bestUrl);
+                            out.put("previewUrl", mp4s.size() > 1 ? mp4s.get(1).optString("url", bestUrl) : bestUrl);
                             return out;
                         }
                     }
@@ -891,6 +930,8 @@ public class TanzeelatiMediaPlugin extends Plugin {
             );
             if (thumb != null) thumb = unescapeHtmlAndJson(thumb);
 
+            long videoBytes = probeContentLength(videoUrl, MOBILE_CHROME_UA);
+
             JSArray vOpts = new JSArray();
             JSObject opt = new JSObject();
             opt.put("key", "best");
@@ -898,7 +939,8 @@ public class TanzeelatiMediaPlugin extends Plugin {
             opt.put("labelEn", "Best Available Quality (MP4)");
             opt.put("descAr", "MP4 · حفظ مباشر");
             opt.put("descEn", "MP4 · Direct Save");
-            opt.put("sizeText", "MP4");
+            opt.put("sizeText", videoBytes > 0 ? formatBytes(videoBytes, true) : "—");
+            if (videoBytes > 0) opt.put("sizeBytes", videoBytes);
             opt.put("directUrl", videoUrl);
             opt.put("userAgent", MOBILE_CHROME_UA);
             vOpts.put(opt);
@@ -908,15 +950,16 @@ public class TanzeelatiMediaPlugin extends Plugin {
             out.put("title", title.length() > 85 ? title.substring(0, 85) : title);
             out.put("author", platEn);
             out.put("duration", "—");
-            out.put("durationSec", 60);
+            out.put("durationSec", 0);
             out.put("thumbnail", thumb != null ? thumb : "");
             out.put("platformAr", platAr);
             out.put("platformEn", platEn);
             out.put("engine", "direct");
             out.put("videoOptions", vOpts);
-            out.put("audioOptions", buildAudioOptions(60, videoUrl, MOBILE_CHROME_UA));
+            out.put("audioOptions", buildAudioOptions(0, videoUrl, MOBILE_CHROME_UA, 0L));
             out.put("fallbackStreamUrl", videoUrl);
             out.put("fallbackAudioUrl", videoUrl);
+            out.put("previewUrl", videoUrl);
             return out;
         } catch (Exception ignored) {
             return null;
@@ -926,6 +969,8 @@ public class TanzeelatiMediaPlugin extends Plugin {
     }
 
     private JSObject buildDirectResult(String directUrl, String platAr, String platEn, boolean audioOnly) {
+        long directBytes = probeContentLength(directUrl, MOBILE_CHROME_UA);
+
         JSArray vOpts = new JSArray();
         JSObject opt = new JSObject();
         opt.put("key", "best");
@@ -933,7 +978,8 @@ public class TanzeelatiMediaPlugin extends Plugin {
         opt.put("labelEn", "Original Quality (Direct File)");
         opt.put("descAr", audioOnly ? "ملف صوتي مباشر" : "ملف فيديو مباشر");
         opt.put("descEn", audioOnly ? "Direct Audio" : "Direct Video");
-        opt.put("sizeText", "—");
+        opt.put("sizeText", directBytes > 0 ? formatBytes(directBytes, true) : "—");
+        if (directBytes > 0) opt.put("sizeBytes", directBytes);
         opt.put("directUrl", directUrl);
         opt.put("userAgent", MOBILE_CHROME_UA);
         vOpts.put(opt);
@@ -950,35 +996,54 @@ public class TanzeelatiMediaPlugin extends Plugin {
         out.put("title", name);
         out.put("author", platEn);
         out.put("duration", "—");
-        out.put("durationSec", 60);
+        out.put("durationSec", 0);
         out.put("thumbnail", "");
         out.put("platformAr", platAr);
         out.put("platformEn", platEn);
         out.put("engine", "direct");
         out.put("videoOptions", vOpts);
-        out.put("audioOptions", buildAudioOptions(60, directUrl, MOBILE_CHROME_UA));
+        out.put("audioOptions", buildAudioOptions(0, directUrl, MOBILE_CHROME_UA, audioOnly ? directBytes : 0L));
         out.put("fallbackStreamUrl", directUrl);
         out.put("fallbackAudioUrl", directUrl);
+        if (!audioOnly) out.put("previewUrl", directUrl);
         return out;
     }
 
-    private JSArray buildAudioOptions(int durSec, String directAudioUrl, String ua) {
+    private JSArray buildAudioOptions(int durSec, String directAudioUrl, String ua, long exactAudioBytes) {
+        long resolvedAudioBytes = exactAudioBytes;
+        String lower = directAudioUrl != null ? directAudioUrl.toLowerCase(Locale.US) : "";
+        if (resolvedAudioBytes <= 0 && !lower.isEmpty() && (lower.contains("mime=audio") || lower.contains("tikwm") || isAudioUrl(lower))) {
+            resolvedAudioBytes = probeContentLength(directAudioUrl, ua);
+        }
+
         JSArray arr = new JSArray();
         String[][] specs = {
-            { "m4a", "M4A – صوت AAC عالي الكفاءة", "M4A – High Efficiency AAC", "M4A / AAC", "M4A / AAC", "160" },
+            { "m4a", "M4A – صوت AAC أصلي", "M4A – Original AAC Audio", "M4A / AAC", "M4A / AAC", "128" },
             { "mp3-320", "MP3 – جودة عالية (320 kbps)", "MP3 – High Quality (320 kbps)", "صوت نقي", "Purest Audio", "320" },
             { "mp3-192", "MP3 – جودة متوسطة (192 kbps)", "MP3 – Medium Quality (192 kbps)", "جودة معيارية", "Standard Quality", "192" }
         };
         for (String[] s : specs) {
             int kbps = Integer.parseInt(s[5]);
-            long estBytes = durSec > 0 ? (kbps * 1000L * durSec) / 8L : 5L * 1024 * 1024;
+            long bytes = 0L;
+            boolean isExact = false;
+            if ("m4a".equals(s[0]) && resolvedAudioBytes > 0) {
+                bytes = resolvedAudioBytes;
+                isExact = true;
+            } else if (resolvedAudioBytes > 0 && isAudioUrl(lower)) {
+                bytes = resolvedAudioBytes;
+                isExact = true;
+            } else if (durSec > 0) {
+                bytes = (kbps * 1000L * durSec) / 8L;
+            }
+
             JSObject o = new JSObject();
             o.put("key", s[0]);
             o.put("labelAr", s[1]);
             o.put("labelEn", s[2]);
             o.put("descAr", s[3]);
             o.put("descEn", s[4]);
-            o.put("sizeText", formatBytes(estBytes));
+            o.put("sizeText", bytes > 0 ? formatBytes(bytes, isExact) : "—");
+            if (bytes > 0) o.put("sizeBytes", bytes);
             o.put("directUrl", directAudioUrl);
             o.put("userAgent", ua);
             arr.put(o);
@@ -1295,12 +1360,74 @@ public class TanzeelatiMediaPlugin extends Plugin {
         return String.format(Locale.US, "%02d:%02d", m, s);
     }
 
+    private long probeContentLength(String urlStr, String ua) {
+        if (urlStr == null || urlStr.trim().isEmpty()) return 0L;
+        HttpURLConnection conn = null;
+        try {
+            conn = openConnectionFollowingRedirects(urlStr, ua != null && !ua.isEmpty() ? ua : MOBILE_CHROME_UA, 3200, "HEAD");
+            int code = conn.getResponseCode();
+            if (code >= 200 && code < 300) {
+                long len = conn.getContentLengthLong();
+                if (len > 0) return len;
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+
+        HttpURLConnection rng = null;
+        try {
+            String current = urlStr;
+            for (int i = 0; i < 4; i++) {
+                URL u = new URL(current);
+                rng = (HttpURLConnection) u.openConnection();
+                rng.setInstanceFollowRedirects(false);
+                rng.setRequestMethod("GET");
+                rng.setConnectTimeout(3200);
+                rng.setReadTimeout(3200);
+                rng.setRequestProperty("User-Agent", ua != null && !ua.isEmpty() ? ua : MOBILE_CHROME_UA);
+                rng.setRequestProperty("Range", "bytes=0-0");
+                int code = rng.getResponseCode();
+                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                    String loc = rng.getHeaderField("Location");
+                    rng.disconnect();
+                    rng = null;
+                    if (loc == null || loc.isEmpty()) break;
+                    current = new URL(u, loc).toString();
+                    continue;
+                }
+                if (code == 206 || (code >= 200 && code < 300)) {
+                    String cr = rng.getHeaderField("Content-Range");
+                    if (cr != null) {
+                        Matcher m = Pattern.compile("/(\\d+)$").matcher(cr.trim());
+                        if (m.find()) {
+                            long total = parseLongSafe(m.group(1));
+                            if (total > 0) return total;
+                        }
+                    }
+                    long cl = rng.getContentLengthLong();
+                    if (cl > 1) return cl;
+                }
+                break;
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (rng != null) rng.disconnect();
+        }
+        return 0L;
+    }
+
     private static String formatBytes(long bytes) {
+        return formatBytes(bytes, false);
+    }
+
+    private static String formatBytes(long bytes, boolean exact) {
         if (bytes <= 0) return "—";
+        String prefix = exact ? "" : "~";
         double mb = bytes / (1024.0 * 1024.0);
         if (mb >= 1.0) {
-            return String.format(Locale.US, mb >= 10.0 ? "~%.0f MB" : "~%.1f MB", mb);
+            return String.format(Locale.US, mb >= 100.0 ? "%s%.0f MB" : "%s%.1f MB", prefix, mb);
         }
-        return String.format(Locale.US, "~%d KB", Math.max(1, Math.round(bytes / 1024.0)));
+        return String.format(Locale.US, "%s%d KB", prefix, Math.max(1, Math.round(bytes / 1024.0)));
     }
 }

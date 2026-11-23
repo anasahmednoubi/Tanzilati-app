@@ -1,27 +1,24 @@
 {
-  "version": "1.2.7",
-  "build": 10,
+  "version": "1.2.8",
+  "build": 11,
   "date": "2026-11-23",
-  "title": "إصلاح متقدم لتحميل فيديوهات فيسبوك والريلز",
-  "title_ar": "إصلاح متقدم لتحميل فيديوهات فيسبوك والريلز",
-  "title_en": "Advanced Fix for Facebook Videos & Reels Downloads",
+  "title": "إعادة ترتيب تبويب حالات الواتساب في الشريط السفلي",
+  "title_ar": "إعادة ترتيب تبويب حالات الواتساب في الشريط السفلي",
+  "title_en": "Reordered WhatsApp Statuses Tab in Bottom Dock",
   "features": [
-    "إصلاح جذري لقراءة صفحات فيسبوك الكبيرة (أكثر من 3 ميجا) دون انقطاع على الأندرويد",
-    "دعم روابط progressive_urls الحديثة وتدفقات DASH مع فصل مسار الصوت والفيديو بدقة",
-    "فك روابط تسجيل الدخول (?next=) وتتبع المعرفات المخفية لروابط المشاركة share/r و fb.watch",
-    "استخراج حقيقي للصوت M4A من فيديوهات فيسبوك على الأندرويد مع خطة إعادة محاولة متكاملة ضد أخطاء 403"
+    "نقل تبويب حالات الواتساب (الحالات) ليصبح بعد تبويب التنزيلات على اليسار في الشريط السفلي",
+    "تحديث ترتيب حركات الانتقال واتجاهات السحب بالإصبع (Swipe) لتطابق الترتيب الجديد في الواجهتين العربية والإنجليزية",
+    "تضمين كافة إصلاحات تحميل فيديوهات فيسبوك والريلز واستخراج الصوت M4A"
   ],
   "features_ar": [
-    "إصلاح جذري لقراءة صفحات فيسبوك الكبيرة (أكثر من 3 ميجا) دون انقطاع على الأندرويد",
-    "دعم روابط progressive_urls الحديثة وتدفقات DASH مع فصل مسار الصوت والفيديو بدقة",
-    "فك روابط تسجيل الدخول (?next=) وتتبع المعرفات المخفية لروابط المشاركة share/r و fb.watch",
-    "استخراج حقيقي للصوت M4A من فيديوهات فيسبوك على الأندرويد مع خطة إعادة محاولة متكاملة ضد أخطاء 403"
+    "نقل تبويب حالات الواتساب (الحالات) ليصبح بعد تبويب التنزيلات على اليسار في الشريط السفلي",
+    "تحديث ترتيب حركات الانتقال واتجاهات السحب بالإصبع (Swipe) لتطابق الترتيب الجديد في الواجهتين العربية والإنجليزية",
+    "تضمين كافة إصلاحات تحميل فيديوهات فيسبوك والريلز واستخراج الصوت M4A"
   ],
   "features_en": [
-    "Fixed 3MB HTML truncation on Android APK so full modern Facebook Reel payloads load cleanly",
-    "Added support for Facebook GraphQL progressive_urls and AdaptationSet-aware DASH video/audio parsing",
-    "Added login (?next=) unwrapping, facebookexternalhit fallback, and plugins/video.php resolution for share/r and fb.watch",
-    "Native M4A audio demuxing for Facebook videos on Android plus multi-UA 403 retry resilience and server yt-dlp fallback"
+    "Moved the WhatsApp Statuses tab after the Downloads tab on the left in the bottom navigation dock",
+    "Updated tab transition animations and touch-swipe navigation order to match the new layout in Arabic and English",
+    "Includes all Facebook video, Reels, and native M4A audio extraction improvements"
   ],
   "apkUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest/download/Tanzeelati-Debug.apk",
   "releaseUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest"

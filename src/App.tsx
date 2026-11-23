@@ -190,8 +190,8 @@ const renderFileName = (rawName: string) => {
   );
 };
 
-const APP_VERSION = '1.2.7';
-const APP_BUILD = 10;
+const APP_VERSION = '1.2.8';
+const APP_BUILD = 11;
 const GITHUB_REPO = 'anasahmednoubi/Tanzilati-app';
 
 const compareSemver = (a: string, b: string): number => {

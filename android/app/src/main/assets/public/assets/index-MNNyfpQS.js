@@ -50698,8 +50698,8 @@ var renderFileName = (rawName) => {
 		})]
 	});
 };
-var APP_VERSION = "1.2.7";
-var APP_BUILD = 10;
+var APP_VERSION = "1.2.8";
+var APP_BUILD = 11;
 var GITHUB_REPO = "anasahmednoubi/Tanzilati-app";
 var compareSemver = (a, b) => {
 	const pa = a.replace(/^v/i, "").split(".").map((n) => parseInt(n, 10) || 0);

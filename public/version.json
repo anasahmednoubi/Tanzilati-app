@@ -1,27 +1,27 @@
 {
-  "version": "1.2.5",
-  "build": 8,
-  "date": "2026-11-17",
-  "title": "مزامنة جوجل + تصميم احترافي للتنزيلات بمكتبة إيموجي متناسقة",
-  "title_ar": "مزامنة جوجل + تصميم احترافي للتنزيلات بمكتبة إيموجي متناسقة",
-  "title_en": "Google Sync + Refined Download Progress & Vector Emoji Library",
+  "version": "1.2.7",
+  "build": 10,
+  "date": "2026-11-23",
+  "title": "إصلاح متقدم لتحميل فيديوهات فيسبوك والريلز",
+  "title_ar": "إصلاح متقدم لتحميل فيديوهات فيسبوك والريلز",
+  "title_en": "Advanced Fix for Facebook Videos & Reels Downloads",
   "features": [
-    "تسجيل دخول حقيقي بحساب جوجل مع مزامنة فورية وتلقائية لسجل التنزيلات السابقة والجديدة عبر جميع أجهزتك",
-    "عرض مصغّرة الفيديو الجاري تحميله بجانب شريط التقدم المباشر في شاشة التحميل وتبويب السجل والتنزيلات بشكل احترافي",
-    "تحسين واجهة اختيار الجودة ومعاينة الملف بسطر واحد واضح ومكتبة إيموجي متجهية متناسقة مع هوية إنجازاتي البصرية",
-    "حساب وعرض الحجم الفعلي الحقيقي للفيديو والصوت لكل جودة قبل التنزيل ومعاينة تشغيل الفيديو قبل الحفظ"
+    "إصلاح جذري لقراءة صفحات فيسبوك الكبيرة (أكثر من 3 ميجا) دون انقطاع على الأندرويد",
+    "دعم روابط progressive_urls الحديثة وتدفقات DASH مع فصل مسار الصوت والفيديو بدقة",
+    "فك روابط تسجيل الدخول (?next=) وتتبع المعرفات المخفية لروابط المشاركة share/r و fb.watch",
+    "استخراج حقيقي للصوت M4A من فيديوهات فيسبوك على الأندرويد مع خطة إعادة محاولة متكاملة ضد أخطاء 403"
   ],
   "features_ar": [
-    "تسجيل دخول حقيقي بحساب جوجل مع مزامنة فورية وتلقائية لسجل التنزيلات السابقة والجديدة عبر جميع أجهزتك",
-    "عرض مصغّرة الفيديو الجاري تحميله بجانب شريط التقدم المباشر في شاشة التحميل وتبويب السجل والتنزيلات بشكل احترافي",
-    "تحسين واجهة اختيار الجودة ومعاينة الملف بسطر واحد واضح ومكتبة إيموجي متجهية متناسقة مع هوية إنجازاتي البصرية",
-    "حساب وعرض الحجم الفعلي الحقيقي للفيديو والصوت لكل جودة قبل التنزيل ومعاينة تشغيل الفيديو قبل الحفظ"
+    "إصلاح جذري لقراءة صفحات فيسبوك الكبيرة (أكثر من 3 ميجا) دون انقطاع على الأندرويد",
+    "دعم روابط progressive_urls الحديثة وتدفقات DASH مع فصل مسار الصوت والفيديو بدقة",
+    "فك روابط تسجيل الدخول (?next=) وتتبع المعرفات المخفية لروابط المشاركة share/r و fb.watch",
+    "استخراج حقيقي للصوت M4A من فيديوهات فيسبوك على الأندرويد مع خطة إعادة محاولة متكاملة ضد أخطاء 403"
   ],
   "features_en": [
-    "Real Google Sign-In with automatic real-time cloud sync for previous and new download history across devices",
-    "Active downloading video thumbnail & live progress bar displayed cleanly in both the Download view and Downloads/History tab",
-    "Refined single-line quality picker, clean RTL filename formatting, and a unified vector emoji library matching Injazati's visual identity",
-    "Real exact byte sizes probed for every Video and Audio quality option with live playable source video preview"
+    "Fixed 3MB HTML truncation on Android APK so full modern Facebook Reel payloads load cleanly",
+    "Added support for Facebook GraphQL progressive_urls and AdaptationSet-aware DASH video/audio parsing",
+    "Added login (?next=) unwrapping, facebookexternalhit fallback, and plugins/video.php resolution for share/r and fb.watch",
+    "Native M4A audio demuxing for Facebook videos on Android plus multi-UA 403 retry resilience and server yt-dlp fallback"
   ],
   "apkUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest/download/Tanzeelati-Debug.apk",
   "releaseUrl": "https://github.com/anasahmednoubi/Tanzilati-app/releases/latest"

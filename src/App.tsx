@@ -115,10 +115,13 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const inferPlatformLabel = (rawUrl: string): string => {
   const lower = rawUrl.toLowerCase();
   if (lower.includes('tiktok.com')) return 'TikTok';
-  if (lower.includes('instagram.com')) return 'Instagram';
+  if (lower.includes('instagram.com') || lower.includes('instagr.am')) return 'Instagram';
   if (lower.includes('twitter.com') || lower.includes('x.com')) return 'X';
   if (lower.includes('youtube.com') || lower.includes('youtu.be')) return 'YouTube';
-  if (lower.includes('facebook.com') || lower.includes('fb.watch')) return 'Facebook';
+  if (lower.includes('facebook.com') || lower.includes('fb.watch') || lower.includes('fb.com') || lower.includes('fb.me')) return 'Facebook';
+  if (lower.includes('threads.net') || lower.includes('threads.com')) return 'Threads';
+  if (lower.includes('reddit.com') || lower.includes('redd.it')) return 'Reddit';
+  if (lower.includes('pinterest.com') || lower.includes('pin.it')) return 'Pinterest';
   if (lower.includes('soundcloud')) return 'SoundCloud';
   if (lower.includes('vimeo.com')) return 'Vimeo';
   return 'Web';
@@ -187,8 +190,8 @@ const renderFileName = (rawName: string) => {
   );
 };
 
-const APP_VERSION = '1.2.5';
-const APP_BUILD = 8;
+const APP_VERSION = '1.2.7';
+const APP_BUILD = 10;
 const GITHUB_REPO = 'anasahmednoubi/Tanzilati-app';
 
 const compareSemver = (a: string, b: string): number => {
@@ -268,6 +271,20 @@ interface ServerMediaInfo {
   userAgent?: string;
 }
 
+interface WhatsAppStatusItem {
+  id: string;
+  name: string;
+  uri: string;
+  isVideo: boolean;
+  mimeType: string;
+  sizeBytes: number;
+  sizeText: string;
+  modifiedMs: number;
+  thumbPath?: string;
+  sourceApp?: string;
+  webFile?: File;
+}
+
 interface TanzeelatiMediaPlugin {
   resolveMedia(options: { url: string }): Promise<ServerMediaInfo>;
   getPendingSharedUrl(): Promise<{ url: string; subject?: string }>;
@@ -284,6 +301,20 @@ interface TanzeelatiMediaPlugin {
     isAudio: boolean;
   }): Promise<{ ok: boolean; jobId: string; filename: string; savedPath?: string; fileSize?: number }>;
   cancelDownload(options: { jobId: string }): Promise<{ ok: boolean }>;
+  checkWhatsAppAccess(): Promise<{ hasAccess: boolean; mode: 'saf' | 'legacy' | 'none' }>;
+  clearWhatsAppAccess(): Promise<{ ok: boolean }>;
+  requestWhatsAppFolderAccess(options?: { appType?: 'whatsapp' | 'business' }): Promise<{
+    granted?: boolean;
+    hasAccess: boolean;
+    items: WhatsAppStatusItem[];
+  }>;
+  listWhatsAppStatuses(): Promise<{ hasAccess: boolean; items: WhatsAppStatusItem[] }>;
+  prepareWhatsAppPreview(options: { uri: string; name?: string }): Promise<{ previewPath: string }>;
+  saveWhatsAppStatus(options: {
+    uri: string;
+    filename: string;
+    mimeType: string;
+  }): Promise<{ ok: boolean; filename: string; savedPath?: string; fileSize?: number }>;
   addListener(
     eventName: 'downloadProgress',
     listenerFunc: (data: {
@@ -316,6 +347,16 @@ interface CaughtVideoInfo {
   source?: 'share' | 'clipboard';
 }
 
+function unwrapFacebookShimUrl(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    if ((u.hostname === 'l.facebook.com' || u.hostname === 'lm.facebook.com') && u.searchParams.get('u')) {
+      return u.searchParams.get('u')!;
+    }
+  } catch {}
+  return rawUrl;
+}
+
 // Cleanly extract a real URL from messy user-copied text
 function extractUrlFromText(text?: string | null): string | null {
   if (!text) return null;
@@ -324,15 +365,15 @@ function extractUrlFromText(text?: string | null): string | null {
   // Match full http/https URLs
   const httpMatch = trimmed.match(/(https?:\/\/[^\s<>"'{}|\\^`]+[^\s<>"'{}|\\^`.,;:!?)\]])/i);
   if (httpMatch) {
-    return httpMatch[1];
+    return unwrapFacebookShimUrl(httpMatch[1]);
   }
 
-  // Match domain links like youtu.be/xxx or tiktok.com/@user/video/xxx
+  // Match domain links like youtu.be/xxx, fb.watch/xxx, or tiktok.com/@user/video/xxx
   const domainMatch = trimmed.match(
-    /((?:www\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|soundcloud\.com|vimeo\.com)\/[^\s<>"'{}|\\^`.,;:!?)\]]+)/i
+    /((?:www\.|m\.|mbasic\.|web\.|touch\.)?(?:youtube\.com|youtu\.be|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|instagram\.com|instagr\.am|facebook\.com|fb\.watch|fb\.com|fb\.me|twitter\.com|x\.com|threads\.net|threads\.com|reddit\.com|redd\.it|soundcloud\.com|vimeo\.com|pin\.it|pinterest\.com)\/[^\s<>"'{}|\\^`.,;:!?)\]]+)/i
   );
   if (domainMatch) {
-    return `https://${domainMatch[1]}`;
+    return unwrapFacebookShimUrl(`https://${domainMatch[1]}`);
   }
 
   return null;
@@ -834,9 +875,49 @@ export default function App() {
     } catch {}
   }, [lang]);
 
-  // Navigation Tabs: 'D' (Download), 'S' (History), 'H' (Settings/More)
-  const [curTab, setCurTab] = useState<'D' | 'S' | 'H'>('D');
+  // Navigation Tabs: 'D' (Download), 'W' (WhatsApp Statuses), 'S' (History), 'H' (Settings/More)
+  const [curTab, setCurTab] = useState<'D' | 'W' | 'S' | 'H'>('D');
   const [tabDirection, setTabDirection] = useState<'in-l' | 'in-r' | ''>('');
+
+  // WhatsApp Statuses Tab State
+  const [waHasAccess, setWaHasAccess] = useState(false);
+  const [waItems, setWaItems] = useState<WhatsAppStatusItem[]>([]);
+  const [waLoading, setWaLoading] = useState(false);
+  const [waIncludeVideos, setWaIncludeVideos] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('wa-include-videos') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const [waFilter, setWaFilter] = useState<'all' | 'photo' | 'video'>('all');
+  const [waSavedIds, setWaSavedIds] = useState<Record<string, boolean>>({});
+  const [waSavingId, setWaSavingId] = useState<string | null>(null);
+  const [waBatchProgress, setWaBatchProgress] = useState<{ done: number; total: number } | null>(null);
+  const [waBatchDialogOpen, setWaBatchDialogOpen] = useState(false);
+  const [waVideoPromptItem, setWaVideoPromptItem] = useState<WhatsAppStatusItem | null>(null);
+  const [waPreviewItem, setWaPreviewItem] = useState<(WhatsAppStatusItem & { resolvedPreviewUrl?: string }) | null>(null);
+  const waWebInputRef = useRef<HTMLInputElement | null>(null);
+  const waObjectUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('wa-include-videos', waIncludeVideos ? '1' : '0');
+    } catch {}
+    if (!waIncludeVideos && waFilter === 'video') {
+      setWaFilter('all');
+    }
+  }, [waIncludeVideos, waFilter]);
+
+  useEffect(() => {
+    return () => {
+      waObjectUrlsRef.current.forEach((u) => {
+        try {
+          URL.revokeObjectURL(u);
+        } catch {}
+      });
+    };
+  }, []);
 
   // Theme & Accent
   const [theme, setThemeState] = useState<'auto' | 'light' | 'dark'>(() => {
@@ -1436,10 +1517,12 @@ export default function App() {
     const isEn = currentLang === 'en';
     let platform = isEn ? 'Video' : 'فيديو';
     if (lower.includes('tiktok.com')) platform = isEn ? 'TikTok' : 'تيك توك';
-    else if (lower.includes('instagram.com')) platform = isEn ? 'Instagram' : 'إنستغرام';
+    else if (lower.includes('instagram.com') || lower.includes('instagr.am')) platform = isEn ? 'Instagram' : 'إنستغرام';
     else if (lower.includes('twitter.com') || lower.includes('x.com')) platform = isEn ? 'X Platform' : 'منصة X';
     else if (lower.includes('youtube.com') || lower.includes('youtu.be')) platform = isEn ? 'YouTube' : 'يوتيوب';
-    else if (lower.includes('facebook.com') || lower.includes('fb.watch')) platform = isEn ? 'Facebook' : 'فيسبوك';
+    else if (lower.includes('facebook.com') || lower.includes('fb.watch') || lower.includes('fb.com') || lower.includes('fb.me')) platform = isEn ? 'Facebook' : 'فيسبوك';
+    else if (lower.includes('threads.')) platform = isEn ? 'Threads' : 'ثريدز';
+    else if (lower.includes('reddit.com') || lower.includes('redd.it')) platform = isEn ? 'Reddit' : 'ريديت';
     else if (lower.includes('soundcloud')) platform = isEn ? 'SoundCloud' : 'ساوند كلاود';
 
     return {
@@ -1455,7 +1538,7 @@ export default function App() {
     const cleanTarget = extractUrlFromText(targetUrl) || targetUrl.trim();
     const isNativeAndroid = Capacitor.isNativePlatform();
 
-    // 1. On Native Android APK: resolve directly via on-device Java plugin (no server lock, no external site)
+    // 1. On Native Android APK: resolve directly via on-device Java plugin first
     if (isNativeAndroid) {
       try {
         const nativeInfo = await TanzeelatiMedia.resolveMedia({ url: cleanTarget });
@@ -1465,28 +1548,26 @@ export default function App() {
       } catch {}
     }
 
-    // 2. Try backend server API (/api/info runs yt-dlp + InnerTube + TikWM + FxTwitter)
-    const customApiBase = (import.meta as any).env?.VITE_API_URL;
-    if (!isNativeAndroid || customApiBase) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000);
-        const res = await fetch(apiUrl('/api/info'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: cleanTarget }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.title) {
-            return data as ServerMediaInfo;
-          }
+    // 2. Always fall back to backend server API (/api/info runs Facebook multi-tier + Instagram + yt-dlp + InnerTube + TikWM + FxTwitter)
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 22000);
+      const res = await fetch(apiUrl('/api/info'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: cleanTarget }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
+        const data = await res.json();
+        if (data && data.title) {
+          return data as ServerMediaInfo;
         }
-      } catch {
-        // Server unreachable
       }
+    } catch {
+      // Server unreachable
     }
 
     // 3. CORS-enabled client-side resolver (TikTok/X/YouTube/Direct)
@@ -1724,15 +1805,233 @@ export default function App() {
     }
   }, [accKey]);
 
+  // WhatsApp Statuses Loaders & Savers
+  const loadWhatsAppStatusesNative = async () => {
+    if (!Capacitor.isNativePlatform()) return;
+    setWaLoading(true);
+    try {
+      const accessRes = await TanzeelatiMedia.checkWhatsAppAccess();
+      if (!accessRes?.hasAccess) {
+        setWaHasAccess(false);
+        setWaItems([]);
+        return;
+      }
+      setWaHasAccess(true);
+      const listRes = await TanzeelatiMedia.listWhatsAppStatuses();
+      setWaItems(Array.isArray(listRes?.items) ? listRes.items : []);
+    } catch {
+      const curT = UI_TEXT[langRef.current];
+      triggerToast(curT.warningTitle, curT.waAccessErrorBody, 'bell');
+    } finally {
+      setWaLoading(false);
+    }
+  };
+
+  const handleConnectWhatsAppNative = async (appType: 'whatsapp' | 'business' = 'whatsapp') => {
+    if (!Capacitor.isNativePlatform()) return;
+    setWaLoading(true);
+    try {
+      const res = await TanzeelatiMedia.requestWhatsAppFolderAccess({ appType });
+      if (res?.hasAccess) {
+        setWaHasAccess(true);
+        setWaItems(Array.isArray(res.items) ? res.items : []);
+      } else {
+        const curT = UI_TEXT[langRef.current];
+        triggerToast(curT.warningTitle, curT.waAccessErrorBody, 'bell');
+      }
+    } catch {
+      const curT = UI_TEXT[langRef.current];
+      triggerToast(curT.warningTitle, curT.waAccessErrorBody, 'bell');
+    } finally {
+      setWaLoading(false);
+    }
+  };
+
+  const processSelectedWebStatusFiles = (files: File[]) => {
+    waObjectUrlsRef.current.forEach((u) => {
+      try {
+        URL.revokeObjectURL(u);
+      } catch {}
+    });
+    waObjectUrlsRef.current = [];
+
+    const validExt = /\.(jpg|jpeg|png|webp|mp4|mkv|3gp|webm)$/i;
+    const vidExt = /\.(mp4|mkv|3gp|webm)$/i;
+    const mapped: WhatsAppStatusItem[] = [];
+
+    for (const file of files) {
+      if (!file || file.size <= 0) continue;
+      if (file.name.startsWith('.') || !validExt.test(file.name)) continue;
+      const isVid = vidExt.test(file.name) || file.type.startsWith('video/');
+      const objUrl = URL.createObjectURL(file);
+      waObjectUrlsRef.current.push(objUrl);
+      mapped.push({
+        id: `web_${file.name}_${file.size}_${file.lastModified}`,
+        name: file.name,
+        uri: objUrl,
+        isVideo: isVid,
+        mimeType: file.type || (isVid ? 'video/mp4' : 'image/jpeg'),
+        sizeBytes: file.size,
+        sizeText: formatClientBytes(file.size, true),
+        modifiedMs: file.lastModified || Date.now(),
+        thumbPath: isVid ? undefined : objUrl,
+        sourceApp: 'WhatsApp',
+        webFile: file,
+      });
+    }
+    mapped.sort((a, b) => b.modifiedMs - a.modifiedMs);
+    setWaHasAccess(true);
+    setWaItems(mapped);
+  };
+
+  const handlePickWebWhatsAppFolder = async () => {
+    const win = window as any;
+    if (typeof win.showDirectoryPicker === 'function') {
+      try {
+        setWaLoading(true);
+        const dirHandle = await win.showDirectoryPicker({ mode: 'read' });
+        const collected: File[] = [];
+        for await (const entry of dirHandle.values()) {
+          if (entry.kind === 'file') {
+            const f = await entry.getFile();
+            collected.push(f);
+          }
+        }
+        processSelectedWebStatusFiles(collected);
+        return;
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return;
+      } finally {
+        setWaLoading(false);
+      }
+    }
+    waWebInputRef.current?.click();
+  };
+
+  const saveSingleWhatsAppStatus = async (item: WhatsAppStatusItem, forceEnableVideo = false): Promise<boolean> => {
+    const curT = UI_TEXT[langRef.current];
+    if (item.isVideo && !waIncludeVideos && !forceEnableVideo) {
+      setWaVideoPromptItem(item);
+      return false;
+    }
+
+    setWaSavingId(item.id);
+    try {
+      const saveFilename = item.name.startsWith('WA_') ? item.name : `WA_Status_${item.name}`;
+      if (Capacitor.isNativePlatform()) {
+        const res = await TanzeelatiMedia.saveWhatsAppStatus({
+          uri: item.uri,
+          filename: saveFilename,
+          mimeType: item.mimeType,
+        });
+        setWaSavedIds((prev) => ({ ...prev, [item.id]: true }));
+        recordNewHistoryEntry({
+          id: uid(),
+          n: res.filename || saveFilename,
+          a: false,
+          fresh: true,
+          platform: item.sourceApp || 'WhatsApp',
+          sizeText: item.sizeText,
+          thumb: item.thumbPath ? Capacitor.convertFileSrc(item.thumbPath) : undefined,
+          createdAtMs: Date.now(),
+        });
+        return true;
+      } else {
+        const dlUrl = item.webFile ? URL.createObjectURL(item.webFile) : item.uri;
+        const a = document.createElement('a');
+        a.href = dlUrl;
+        a.download = saveFilename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        if (item.webFile) {
+          setTimeout(() => URL.revokeObjectURL(dlUrl), 30000);
+        }
+        setWaSavedIds((prev) => ({ ...prev, [item.id]: true }));
+        recordNewHistoryEntry({
+          id: uid(),
+          n: saveFilename,
+          a: false,
+          fresh: true,
+          platform: item.sourceApp || 'WhatsApp',
+          sizeText: item.sizeText,
+          createdAtMs: Date.now(),
+        });
+        return true;
+      }
+    } catch {
+      triggerToast(curT.warningTitle, curT.waSaveErrorBody, 'bell');
+      return false;
+    } finally {
+      setWaSavingId((prev) => (prev === item.id ? null : prev));
+    }
+  };
+
+  const executeBatchSaveWhatsApp = async (includeVideos: boolean) => {
+    const curT = UI_TEXT[langRef.current];
+    const targets = waItems.filter((it) => includeVideos || !it.isVideo);
+    if (targets.length === 0) return;
+
+    setWaBatchDialogOpen(false);
+    setWaBatchProgress({ done: 0, total: targets.length });
+    let savedCount = 0;
+
+    for (let i = 0; i < targets.length; i++) {
+      const ok = await saveSingleWhatsAppStatus(targets[i], includeVideos);
+      if (ok) savedCount++;
+      setWaBatchProgress({ done: i + 1, total: targets.length });
+    }
+
+    setWaBatchProgress(null);
+    if (savedCount > 0) {
+      triggerToast(curT.completedToastTitle, curT.waSavedBatchToast(savedCount));
+    }
+  };
+
+  const handleBatchSaveClick = () => {
+    const hasVideos = waItems.some((it) => it.isVideo);
+    if (hasVideos) {
+      setWaBatchDialogOpen(true);
+    } else {
+      void executeBatchSaveWhatsApp(false);
+    }
+  };
+
+  const openWhatsAppPreview = async (item: WhatsAppStatusItem) => {
+    if (!Capacitor.isNativePlatform()) {
+      setWaPreviewItem({ ...item, resolvedPreviewUrl: item.uri });
+      return;
+    }
+    if (!item.isVideo && item.uri.startsWith('file://')) {
+      setWaPreviewItem({ ...item, resolvedPreviewUrl: Capacitor.convertFileSrc(item.uri) });
+      return;
+    }
+    setWaPreviewItem({
+      ...item,
+      resolvedPreviewUrl: item.thumbPath ? Capacitor.convertFileSrc(item.thumbPath) : undefined,
+    });
+    try {
+      const pv = await TanzeelatiMedia.prepareWhatsAppPreview({ uri: item.uri, name: item.name });
+      if (pv?.previewPath) {
+        const src = Capacitor.convertFileSrc(pv.previewPath);
+        setWaPreviewItem((prev) => (prev && prev.id === item.id ? { ...prev, resolvedPreviewUrl: src } : prev));
+      }
+    } catch {}
+  };
+
   // Tab Switcher with Direction
-  const switchTab = (nextTab: 'D' | 'S' | 'H') => {
+  const switchTab = (nextTab: 'D' | 'W' | 'S' | 'H') => {
     if (nextTab === curTab) return;
-    const tabOrder = ['D', 'S', 'H'];
+    const tabOrder = ['D', 'W', 'S', 'H'];
     const isForward = tabOrder.indexOf(nextTab) > tabOrder.indexOf(curTab);
     const dir = lang === 'ar' ? (isForward ? 'in-l' : 'in-r') : isForward ? 'in-r' : 'in-l';
     setTabDirection(dir);
     setCurTab(nextTab);
     if (nextTab === 'H') setHSub(null);
+    if (nextTab === 'W' && Capacitor.isNativePlatform() && waItems.length === 0 && !waLoading) {
+      void loadWhatsAppStatusesNative();
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -1807,7 +2106,7 @@ export default function App() {
       const dy = e.changedTouches[0].clientY - sy;
       sx = null;
       if (!ok || Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.3) return;
-      const order = ['D', 'S', 'H'] as const;
+      const order = ['D', 'W', 'S', 'H'] as const;
       const i = order.indexOf(curTabRef.current);
       const forward = langRef.current === 'en' ? dx < 0 : dx > 0;
       const next = order[i + (forward ? 1 : -1)];
@@ -2115,111 +2414,123 @@ export default function App() {
     setDlPhase(isAudio ? 'extracting' : 'downloading');
 
     const isNativeAndroid = Capacitor.isNativePlatform();
+    const curLangNowForExt = langRef.current;
 
-    // Path A: Native Android On-Device Self-Contained Download & Mux Engine (Zero external sites!)
+    // Path A: Native Android On-Device Direct Download & Mux Engine (when direct stream URLs are resolved natively)
     if (isNativeAndroid) {
+      let nativeCancelled = false;
       const nativeJobId = `apk_${Date.now().toString(36)}`;
       activeJobIdRef.current = nativeJobId;
       let progressListenerHandle: { remove: () => Promise<void> } | null = null;
 
       try {
         let meta = overrideMeta || customVideoMeta;
-        if (!meta || meta.resolvedUrl !== cleanTarget || !(isAudio ? meta.audioOptions : meta.videoOptions)?.some((o) => o.directUrl)) {
-          const fresh = await TanzeelatiMedia.resolveMedia({ url: cleanTarget });
-          if (fresh) {
-            meta = {
-              title: fresh.title,
-              author: fresh.author,
-              duration: fresh.duration,
-              thumbnail: fresh.thumbnail,
-              resolvedUrl: fresh.url,
-              videoOptions: fresh.videoOptions,
-              audioOptions: fresh.audioOptions,
-            };
-            setCustomVideoMeta(meta);
-          }
+        const hasNativeDirectStream = Boolean(
+          meta &&
+            meta.resolvedUrl === cleanTarget &&
+            (isAudio ? meta.audioOptions : meta.videoOptions)?.some((o) => o.directUrl)
+        );
+
+        if (!meta || meta.resolvedUrl !== cleanTarget || !hasNativeDirectStream) {
+          try {
+            const fresh = await TanzeelatiMedia.resolveMedia({ url: cleanTarget });
+            if (fresh) {
+              meta = {
+                title: fresh.title,
+                author: fresh.author,
+                duration: fresh.duration,
+                thumbnail: fresh.thumbnail,
+                resolvedUrl: fresh.url,
+                videoOptions: fresh.videoOptions,
+                audioOptions: fresh.audioOptions,
+              };
+              setCustomVideoMeta(meta);
+            }
+          } catch {}
         }
 
         const optionsList = isAudio ? meta?.audioOptions : meta?.videoOptions;
         const chosen = optionsList?.find((o) => o.key === formatKey) || optionsList?.[0];
-        const safeTitle =
-          (meta?.title || (isAudio ? 'audio' : 'video'))
-            .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 60) || 'tanzeelati-media';
-        const streamUrlLower = (chosen?.directUrl || '').toLowerCase();
-        const isM4aStream =
-          formatKey === 'm4a' ||
-          /mime=audio(%2f|\/)mp4|googlevideo\.com|\.m4a(\?|$)|\.mp4(\?|$)/.test(streamUrlLower);
-        const ext = isAudio ? (isM4aStream ? 'm4a' : 'mp3') : 'mp4';
-        const mimeType = isAudio ? (ext === 'm4a' ? 'audio/mp4' : 'audio/mpeg') : 'video/mp4';
-        const filename = `${safeTitle}.${ext}`;
 
-        progressListenerHandle = await TanzeelatiMedia.addListener('downloadProgress', (ev) => {
-          if (ev.jobId !== nativeJobId) return;
-          if (typeof ev.progress === 'number') setProgress(ev.progress);
-          if (ev.speedMBs) setSpeedVal(ev.speedMBs);
-          if (typeof ev.etaSec === 'number') setEtaSec(ev.etaSec);
-          if (ev.phase === 'extracting') setDlPhase('extracting');
-          else if (ev.phase === 'downloading') setDlPhase('downloading');
-        });
+        if (chosen?.directUrl) {
+          const safeTitle =
+            (meta?.title || (isAudio ? 'audio' : 'video'))
+              .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, 60) || 'tanzeelati-media';
+          const streamUrlLower = (chosen?.directUrl || '').toLowerCase();
+          const isM4aStream =
+            formatKey === 'm4a' ||
+            /mime=audio(%2f|\/)mp4|googlevideo\.com|\.m4a(\?|$)|\.mp4(\?|$)/.test(streamUrlLower);
+          const ext = isAudio ? (isM4aStream ? 'm4a' : 'mp3') : 'mp4';
+          const mimeType = isAudio ? (ext === 'm4a' ? 'audio/mp4' : 'audio/mpeg') : 'video/mp4';
+          const filename = `${safeTitle}.${ext}`;
 
-        const res = await TanzeelatiMedia.downloadMedia({
-          jobId: nativeJobId,
-          url: cleanTarget,
-          videoUrl: isAudio ? undefined : chosen?.directUrl,
-          audioUrl: isAudio ? chosen?.directUrl : chosen?.audioUrl,
-          userAgent: chosen?.userAgent,
-          qualityKey: formatKey,
-          filename,
-          mimeType,
-          isAudio,
-        });
+          progressListenerHandle = await TanzeelatiMedia.addListener('downloadProgress', (ev) => {
+            if (ev.jobId !== nativeJobId) return;
+            if (typeof ev.progress === 'number') setProgress(ev.progress);
+            if (ev.speedMBs) setSpeedVal(ev.speedMBs);
+            if (typeof ev.etaSec === 'number') setEtaSec(ev.etaSec);
+            if (ev.phase === 'extracting') setDlPhase('extracting');
+            else if (ev.phase === 'downloading') setDlPhase('downloading');
+          });
 
-        await progressListenerHandle?.remove().catch(() => {});
-        activeJobIdRef.current = null;
-        setIsDownloading(false);
-        setProgress(100);
-        setDlPhase('complete');
-        setEtaSec(0);
-        setShowRes(true);
+          const res = await TanzeelatiMedia.downloadMedia({
+            jobId: nativeJobId,
+            url: cleanTarget,
+            videoUrl: isAudio ? undefined : chosen.directUrl,
+            audioUrl: isAudio ? chosen.directUrl : chosen.audioUrl,
+            userAgent: chosen.userAgent,
+            qualityKey: formatKey,
+            filename,
+            mimeType,
+            isAudio,
+          });
 
-        const entryName = res.filename || filename;
-        const curT = UI_TEXT[langRef.current];
-        const newEntry: HistoryEntry = {
-          id: uid(),
-          n: entryName,
-          a: isAudio,
-          fresh: true,
-          sourceUrl: cleanTarget,
-          platform: inferPlatformLabel(cleanTarget),
-          sizeText: chosen?.sizeText && chosen.sizeText !== '—' ? chosen.sizeText : undefined,
-          thumb: meta?.thumbnail,
-          createdAtMs: Date.now(),
-        };
-        recordNewHistoryEntry(newEntry);
-        triggerToast(curT.completedToastTitle, curT.completedToastBody(entryName.slice(0, 28)));
-        return;
+          await progressListenerHandle?.remove().catch(() => {});
+          activeJobIdRef.current = null;
+          setIsDownloading(false);
+          setProgress(100);
+          setDlPhase('complete');
+          setEtaSec(0);
+          setShowRes(true);
+
+          const entryName = res.filename || filename;
+          const curT = UI_TEXT[langRef.current];
+          const newEntry: HistoryEntry = {
+            id: uid(),
+            n: entryName,
+            a: isAudio,
+            fresh: true,
+            sourceUrl: cleanTarget,
+            platform: inferPlatformLabel(cleanTarget),
+            sizeText: chosen.sizeText && chosen.sizeText !== '—' ? chosen.sizeText : undefined,
+            thumb: meta?.thumbnail,
+            createdAtMs: Date.now(),
+          };
+          recordNewHistoryEntry(newEntry);
+          triggerToast(curT.completedToastTitle, curT.completedToastBody(entryName.slice(0, 28)));
+          return;
+        }
       } catch (err: any) {
         await progressListenerHandle?.remove().catch(() => {});
-        activeJobIdRef.current = null;
-        setIsDownloading(false);
-        setSpeedVal(null);
-        setEtaSec(null);
         if (err?.message === 'CANCELLED') {
+          nativeCancelled = true;
+          activeJobIdRef.current = null;
+          setIsDownloading(false);
+          setSpeedVal(null);
+          setEtaSec(null);
           setDlPhase('cancelled');
-        } else {
-          setDlPhase('idle');
-          setProgress(0);
-          const curT = UI_TEXT[langRef.current];
-          triggerToast(curT.warningTitle, curT.downloadErrorBody, 'bell');
+          return;
         }
-        return;
+        // Non-cancelled on-device error (e.g. HTTP 403 or yt-dlp-only social link) -> seamlessly fall through to Path B server-backed engine!
       }
+      if (nativeCancelled) return;
+      await progressListenerHandle?.remove().catch(() => {});
     }
 
-    // Path B: Server-Backed Download (yt-dlp + ffmpeg on server.ts)
+    // Path B: Server-Backed Download (yt-dlp + ffmpeg + Facebook/Instagram resolvers on server.ts)
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 25000);
@@ -2236,7 +2547,8 @@ export default function App() {
       });
       clearTimeout(timeoutId);
 
-      if (!startRes.ok) {
+      const startCt = startRes.headers.get('content-type') || '';
+      if (!startRes.ok || !startCt.includes('application/json')) {
         throw new Error('START_FAILED');
       }
 
@@ -2253,7 +2565,7 @@ export default function App() {
           if (!stRes.ok) return;
           const st = await stRes.json();
 
-          setProgress(typeof st.progress === 'number' ? st.progress : 0);
+          setProgress(typeof st.progress === 'number' ? Math.min(isNativeAndroid ? 92 : 100, st.progress) : 0);
           setSpeedVal(st.speedMBs || null);
           setEtaSec(typeof st.etaSec === 'number' ? st.etaSec : null);
 
@@ -2265,6 +2577,35 @@ export default function App() {
               clearInterval(timerRef.current);
               timerRef.current = null;
             }
+
+            const entryName = st.filename || filename || `${title}.mp4`;
+            if (isNativeAndroid) {
+              try {
+                const fileEndpoint = apiUrl(`/api/download/file/${jobId}`);
+                const mimeType = isAudio
+                  ? entryName.endsWith('.m4a')
+                    ? 'audio/mp4'
+                    : entryName.endsWith('.opus')
+                      ? 'audio/ogg'
+                      : 'audio/mpeg'
+                  : 'video/mp4';
+                await TanzeelatiMedia.downloadMedia({
+                  jobId,
+                  url: fileEndpoint,
+                  videoUrl: isAudio ? undefined : fileEndpoint,
+                  audioUrl: isAudio ? fileEndpoint : undefined,
+                  qualityKey: formatKey,
+                  filename: entryName,
+                  mimeType,
+                  isAudio,
+                });
+              } catch {
+                triggerDeviceSave(jobId, entryName);
+              }
+            } else {
+              triggerDeviceSave(jobId, entryName);
+            }
+
             activeJobIdRef.current = null;
             setIsDownloading(false);
             setProgress(100);
@@ -2272,10 +2613,7 @@ export default function App() {
             setEtaSec(0);
             setShowRes(true);
 
-            triggerDeviceSave(jobId, st.filename || filename);
-
             const curT = UI_TEXT[langRef.current];
-            const entryName = st.filename || filename || `${title}.mp4`;
             const activeMetaObj = overrideMeta || customVideoMeta;
             const activeOptList = isAudio
               ? activeMetaObj?.audioOptions
@@ -2285,7 +2623,7 @@ export default function App() {
               prev
                 ? {
                     ...prev,
-                    title: activeMetaObj?.title || title || prev.title,
+                    title: activeMetaObj?.title || title || prev.title || (curLangNowForExt === 'ar' ? 'ملف وسائط' : 'Media File'),
                     filename: entryName,
                   }
                 : prev
@@ -3041,6 +3379,299 @@ export default function App() {
               </div>
             </section>
           )}
+        </div>
+
+        {/* Tab: WhatsApp Statuses (#pW) */}
+        <div id="pW" className={`${curTab === 'W' ? '' : 'hide'} ${tabDirection}`}>
+          <input
+            ref={waWebInputRef}
+            type="file"
+            multiple
+            // @ts-expect-error webkitdirectory is standard across desktop & Android Chromium browsers
+            webkitdirectory="true"
+            className="hide"
+            onChange={(e) => {
+              const files = e.target.files ? Array.from(e.target.files) : [];
+              if (files.length > 0) processSelectedWebStatusFiles(files);
+              e.target.value = '';
+            }}
+          />
+
+          <section className="card wa-head-card">
+            <div className="wa-head-top">
+              <div className="wa-head-brand">
+                <EmojiIcon name="whatsapp" size={32} />
+                <div style={{ minWidth: 0 }}>
+                  <b style={{ fontSize: '17px', display: 'block', lineHeight: 1.3 }}>{t.waTitle}</b>
+                  <span className="sub" style={{ fontSize: '13px', display: 'block' }}>
+                    {t.waSubtitle}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {waHasAccess && (
+              <div className="wa-head-actions">
+                <button
+                  type="button"
+                  className="wa-action-btn"
+                  disabled={waLoading}
+                  onClick={() => {
+                    if (Capacitor.isNativePlatform()) void loadWhatsAppStatusesNative();
+                    else void handlePickWebWhatsAppFolder();
+                  }}
+                >
+                  <svg
+                    className={waLoading ? 'upd-spin' : ''}
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                    <path d="M3 3v5h5" />
+                    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                    <path d="M16 16h5v5" />
+                  </svg>
+                  <span>{t.waRefreshBtn}</span>
+                </button>
+                <button
+                  type="button"
+                  className="ghost wa-action-btn"
+                  disabled={waLoading}
+                  onClick={() => {
+                    if (Capacitor.isNativePlatform()) void handleConnectWhatsAppNative('whatsapp');
+                    else void handlePickWebWhatsAppFolder();
+                  }}
+                >
+                  <span>{t.waChangeFolderBtn}</span>
+                </button>
+              </div>
+            )}
+          </section>
+
+          {/* User Switch: Choose whether to download Video Statuses or Photos Only */}
+          <section className="card">
+            <div className="wa-toggle-row">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                <EmojiIcon name="video" size={22} />
+                <div style={{ minWidth: 0 }}>
+                  <b style={{ display: 'block', fontSize: '15px' }}>{t.waIncludeVideosTitle}</b>
+                  <span className="sub" style={{ fontSize: '12.5px', display: 'block', marginTop: '2px' }}>
+                    {waIncludeVideos ? t.waIncludeVideosDescOn : t.waIncludeVideosDescOff}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                className={`swt ${waIncludeVideos ? 'on' : ''}`}
+                role="switch"
+                aria-checked={waIncludeVideos}
+                aria-label={t.waIncludeVideosTitle}
+                onClick={() => setWaIncludeVideos((v) => !v)}
+              >
+                <i></i>
+              </button>
+            </div>
+          </section>
+
+          {!waHasAccess ? (
+            <section className="card">
+              <b style={{ fontSize: '16px', display: 'block', marginBottom: '6px' }}>{t.waGrantTitle}</b>
+              <p className="sub" style={{ margin: '0 0 10px', lineHeight: 1.55 }}>
+                {Capacitor.isNativePlatform() ? t.waGrantDesc : t.waWebHint}
+              </p>
+              <code className="wa-path-code">{t.waFolderPathHint}</code>
+
+              <div className="wa-head-actions" style={{ marginTop: '14px' }}>
+                {Capacitor.isNativePlatform() ? (
+                  <>
+                    <button
+                      type="button"
+                      className="wa-action-btn"
+                      style={{ flex: 1 }}
+                      disabled={waLoading}
+                      onClick={() => void handleConnectWhatsAppNative('whatsapp')}
+                    >
+                      <EmojiIcon name="whatsapp" size={18} />
+                      <span>{t.waConnectBtn}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost wa-action-btn"
+                      disabled={waLoading}
+                      onClick={() => void handleConnectWhatsAppNative('business')}
+                    >
+                      <span>{t.waConnectBusinessBtn}</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="wa-action-btn"
+                    style={{ width: '100%' }}
+                    disabled={waLoading}
+                    onClick={() => void handlePickWebWhatsAppFolder()}
+                  >
+                    <EmojiIcon name="whatsapp" size={18} />
+                    <span>{t.waPickWebFolderBtn}</span>
+                  </button>
+                )}
+              </div>
+            </section>
+          ) : waLoading && waItems.length === 0 ? (
+            <section className="card">
+              <div className="empty">{t.waScanningLabel}</div>
+            </section>
+          ) : (() => {
+            const photoCount = waItems.filter((i) => !i.isVideo).length;
+            const videoCount = waItems.filter((i) => i.isVideo).length;
+            const visibleItems = waItems.filter((it) => {
+              if (!waIncludeVideos && it.isVideo) return false;
+              if (waFilter === 'photo') return !it.isVideo;
+              if (waFilter === 'video') return it.isVideo;
+              return true;
+            });
+
+            return (
+              <>
+                {waItems.length > 0 && (
+                  <section className="card" style={{ paddingBottom: '14px' }}>
+                    <div className="wa-toolbar">
+                      <span className="sub" style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                        {t.waCountSummary(photoCount, videoCount)}
+                      </span>
+                      <button
+                        type="button"
+                        className="wa-action-btn"
+                        disabled={Boolean(waBatchProgress) || (photoCount === 0 && !waIncludeVideos)}
+                        onClick={handleBatchSaveClick}
+                      >
+                        <EmojiIcon name="download" size={16} />
+                        <span>
+                          {waBatchProgress
+                            ? t.waSavingBatchProgress(waBatchProgress.done, waBatchProgress.total)
+                            : waIncludeVideos
+                              ? t.waSaveAllBtn(photoCount + videoCount)
+                              : t.waSavePhotosOnlyBtn(photoCount)}
+                        </span>
+                      </button>
+                    </div>
+
+                    <div className="chips">
+                      <button
+                        type="button"
+                        className={`chip ${waFilter === 'all' ? 'on' : ''}`}
+                        onClick={() => setWaFilter('all')}
+                      >
+                        {t.waFilterAll}
+                      </button>
+                      <button
+                        type="button"
+                        className={`chip ${waFilter === 'photo' ? 'on' : ''}`}
+                        onClick={() => setWaFilter('photo')}
+                      >
+                        {t.waFilterPhotos} ({photoCount})
+                      </button>
+                      {waIncludeVideos && (
+                        <button
+                          type="button"
+                          className={`chip ${waFilter === 'video' ? 'on' : ''}`}
+                          onClick={() => setWaFilter('video')}
+                        >
+                          {t.waFilterVideos} ({videoCount})
+                        </button>
+                      )}
+                    </div>
+
+                    {!waIncludeVideos && videoCount > 0 && (
+                      <p className="hint" style={{ marginTop: '10px', fontSize: '12.5px' }}>
+                        {t.waVideosHiddenHint}
+                      </p>
+                    )}
+                  </section>
+                )}
+
+                {visibleItems.length > 0 ? (
+                  <div className="wa-grid">
+                    {visibleItems.map((item) => {
+                      const thumbSrc =
+                        item.thumbPath && item.thumbPath.startsWith('file://') && Capacitor.isNativePlatform()
+                          ? Capacitor.convertFileSrc(item.thumbPath)
+                          : item.thumbPath || '';
+                      const isSaved = Boolean(waSavedIds[item.id]);
+                      const isSaving = waSavingId === item.id;
+
+                      return (
+                        <article key={item.id} className="wa-card">
+                          <button
+                            type="button"
+                            className="wa-thumb-btn"
+                            onClick={() => void openWhatsAppPreview(item)}
+                            aria-label={item.name}
+                          >
+                            {thumbSrc ? (
+                              <img src={thumbSrc} alt={item.name} loading="lazy" />
+                            ) : (
+                              <EmojiIcon name={item.isVideo ? 'video' : 'sparkles'} size={34} />
+                            )}
+                            <span className="wa-type-badge">
+                              <EmojiIcon name={item.isVideo ? 'video' : 'sparkles'} size={15} />
+                            </span>
+                            {item.isVideo && (
+                              <span className="wa-play-overlay" aria-hidden="true">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                                  <path d="M8 5v14l11-7z" />
+                                </svg>
+                              </span>
+                            )}
+                            <span className="wa-size-badge">{item.sizeText}</span>
+                          </button>
+
+                          <div className="wa-card-foot">
+                            <div className="wa-card-meta">
+                              <div className="wa-card-name" dir="auto">
+                                {item.sourceApp || 'WhatsApp'}
+                              </div>
+                              <div className="wa-card-src">
+                                {item.isVideo ? t.waFilterVideos : t.waFilterPhotos}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className={`wa-save-btn ${isSaved ? 'saved' : ''}`}
+                              disabled={isSaving}
+                              onClick={() => void saveSingleWhatsAppStatus(item)}
+                            >
+                              {isSaved ? (
+                                <>
+                                  <EmojiIcon name="check" size={16} />
+                                  <span>{t.waSavedBadge}</span>
+                                </>
+                              ) : (
+                                <span>{isSaving ? '…' : t.waSaveBtn}</span>
+                              )}
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <section className="card">
+                    <b style={{ display: 'block', textAlign: 'center', marginBottom: '6px' }}>{t.waEmptyTitle}</b>
+                    <div className="empty" style={{ padding: '10px 0' }}>
+                      {t.waEmptyDesc}
+                    </div>
+                  </section>
+                )}
+              </>
+            );
+          })()}
         </div>
 
         {/* Tab: History / Downloads (#pS) */}
@@ -3980,6 +4611,30 @@ export default function App() {
           </button>
 
           <button
+            id="tW"
+            className={curTab === 'W' ? 'on' : ''}
+            aria-label={t.navStatuses}
+            role="tab"
+            aria-selected={curTab === 'W'}
+            onClick={() => switchTab('W')}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.1"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            </svg>
+            <span className="tn">{t.navStatuses}</span>
+          </button>
+
+          <button
             id="tS"
             className={curTab === 'S' ? 'on' : ''}
             aria-label={t.navHistory}
@@ -4608,6 +5263,151 @@ export default function App() {
                   {t.tourSkip}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- WhatsApp Status Preview Sheet --- */}
+      {waPreviewItem && (
+        <div
+          className="sheet-backdrop"
+          style={{ zIndex: 180 }}
+          onClick={() => setWaPreviewItem(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="sheet-container"
+            onClick={(e) => e.stopPropagation()}
+            dir={lang === 'ar' ? 'rtl' : 'ltr'}
+          >
+            <div className="sheet-handle"></div>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div style={{ minWidth: 0 }}>
+                <div className="sheet-meta-kicker">
+                  {waPreviewItem.sourceApp || 'WhatsApp'} · {waPreviewItem.sizeText}
+                </div>
+                <b style={{ fontSize: '17px', display: 'block' }}>{t.waPreviewTitle}</b>
+              </div>
+              <button
+                type="button"
+                className="ghost sheet-close"
+                onClick={() => setWaPreviewItem(null)}
+              >
+                {t.close}
+              </button>
+            </div>
+
+            <div className="wa-preview-box">
+              {waPreviewItem.isVideo ? (
+                waPreviewItem.resolvedPreviewUrl ? (
+                  <video
+                    src={waPreviewItem.resolvedPreviewUrl}
+                    controls
+                    autoPlay
+                    playsInline
+                  />
+                ) : (
+                  <EmojiIcon name="video" size={44} />
+                )
+              ) : waPreviewItem.resolvedPreviewUrl ? (
+                <img src={waPreviewItem.resolvedPreviewUrl} alt={waPreviewItem.name} />
+              ) : (
+                <EmojiIcon name="sparkles" size={44} />
+              )}
+            </div>
+
+            <button
+              type="button"
+              className="go"
+              style={{ marginBottom: 0 }}
+              onClick={async () => {
+                const target = waPreviewItem;
+                setWaPreviewItem(null);
+                const ok = await saveSingleWhatsAppStatus(target, target.isVideo && waIncludeVideos);
+                if (ok) {
+                  triggerToast(t.completedToastTitle, t.waSavedSingleToast(target.name.slice(0, 26)));
+                }
+              }}
+            >
+              <EmojiIcon name="download" size={18} />
+              <span>{t.waSaveBtn}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- WhatsApp Batch Video Choice Dialog --- */}
+      {waBatchDialogOpen && (() => {
+        const pCount = waItems.filter((i) => !i.isVideo).length;
+        const vCount = waItems.filter((i) => i.isVideo).length;
+        return (
+          <div className="dlg-backdrop" onClick={() => setWaBatchDialogOpen(false)} role="dialog" aria-modal="true">
+            <div className="dlg-card" onClick={(e) => e.stopPropagation()} dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '10px' }}>
+                <EmojiIcon name="whatsapp" size={42} />
+              </div>
+              <h3 className="dlg-title">{t.waBatchDialogTitle}</h3>
+              <p className="dlg-desc">{t.waBatchDialogDesc(pCount, vCount)}</p>
+              <div className="dlg-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWaIncludeVideos(true);
+                    void executeBatchSaveWhatsApp(true);
+                  }}
+                >
+                  {t.waBatchWithVideos(pCount + vCount)}
+                </button>
+                {pCount > 0 && (
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      setWaIncludeVideos(false);
+                      void executeBatchSaveWhatsApp(false);
+                    }}
+                  >
+                    {t.waBatchPhotosOnly(pCount)}
+                  </button>
+                )}
+                <button type="button" className="ghost" onClick={() => setWaBatchDialogOpen(false)}>
+                  {t.cancel}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* --- Single Video Prompt When Video Download Toggle is Off --- */}
+      {waVideoPromptItem && (
+        <div className="dlg-backdrop" onClick={() => setWaVideoPromptItem(null)} role="dialog" aria-modal="true">
+          <div className="dlg-card" onClick={(e) => e.stopPropagation()} dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '10px' }}>
+              <EmojiIcon name="video" size={42} />
+            </div>
+            <h3 className="dlg-title">{t.waVideoChoiceTitle}</h3>
+            <p className="dlg-desc">{t.waVideoChoiceDesc}</p>
+            <div className="dlg-actions">
+              <button
+                type="button"
+                onClick={async () => {
+                  const target = waVideoPromptItem;
+                  setWaVideoPromptItem(null);
+                  setWaIncludeVideos(true);
+                  const ok = await saveSingleWhatsAppStatus(target, true);
+                  if (ok) {
+                    triggerToast(t.completedToastTitle, t.waSavedSingleToast(target.name.slice(0, 26)));
+                  }
+                }}
+              >
+                {t.waEnableAndSaveVideo}
+              </button>
+              <button type="button" className="ghost" onClick={() => setWaVideoPromptItem(null)}>
+                {t.cancel}
+              </button>
             </div>
           </div>
         </div>

@@ -1,24 +1,40 @@
 package com.tanzeelati.app;
 
+import android.Manifest;
+import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.UriPermission;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaMuxer;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.provider.DocumentsContract;
 import android.provider.MediaStore;
+
+import androidx.activity.result.ActivityResult;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -33,14 +49,19 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -49,7 +70,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-@CapacitorPlugin(name = "TanzeelatiMedia")
+@CapacitorPlugin(
+    name = "TanzeelatiMedia",
+    permissions = {
+        @Permission(
+            alias = "storage",
+            strings = { Manifest.permission.READ_EXTERNAL_STORAGE }
+        )
+    }
+)
 public class TanzeelatiMediaPlugin extends Plugin {
 
     private static final String ANDROID_VR_UA =
@@ -58,6 +87,12 @@ public class TanzeelatiMediaPlugin extends Plugin {
         "com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip";
     private static final String MOBILE_CHROME_UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
+    private static final String DESKTOP_CHROME_UA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+    private static final String FB_EXTERNAL_HIT_UA =
+        "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)";
+    private static final String WA_PREFS_NAME = "tanzeelati_wa_prefs";
+    private static final String WA_TREE_URIS_KEY = "wa_tree_uris_json";
 
     private static volatile TanzeelatiMediaPlugin activeInstance;
     private static volatile String pendingSharedUrl = null;
@@ -110,14 +145,14 @@ public class TanzeelatiMediaPlugin extends Plugin {
         if (raw == null || raw.trim().isEmpty()) return null;
         Matcher m = Pattern.compile("(https?://[^\\s<>\"'{}|\\\\^`]+)", Pattern.CASE_INSENSITIVE).matcher(raw.trim());
         if (m.find()) {
-            return m.group(1).replaceAll("[.,;:!?)]+$", "");
+            return extractCleanUrl(m.group(1).replaceAll("[.,;:!?)]+$", ""));
         }
         Matcher dom = Pattern.compile(
-            "((?:www\\.)?(?:youtube\\.com|youtu\\.be|tiktok\\.com|instagram\\.com|facebook\\.com|fb\\.watch|twitter\\.com|x\\.com|soundcloud\\.com|vimeo\\.com)/[^\\s<>\"'{}|\\\\^`]+)",
+            "((?:www\\.|m\\.|mbasic\\.|web\\.|touch\\.)?(?:youtube\\.com|youtu\\.be|tiktok\\.com|vm\\.tiktok\\.com|vt\\.tiktok\\.com|instagram\\.com|instagr\\.am|facebook\\.com|fb\\.watch|fb\\.com|fb\\.me|twitter\\.com|x\\.com|threads\\.net|threads\\.com|reddit\\.com|redd\\.it|soundcloud\\.com|vimeo\\.com|pin\\.it|pinterest\\.com)/[^\\s<>\"'{}|\\\\^`]+)",
             Pattern.CASE_INSENSITIVE
         ).matcher(raw.trim());
         if (dom.find()) {
-            return "https://" + dom.group(1).replaceAll("[.,;:!?)]+$", "");
+            return extractCleanUrl("https://" + dom.group(1).replaceAll("[.,;:!?)]+$", ""));
         }
         return null;
     }
@@ -263,7 +298,17 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 if (isAudio) {
                     String stream = !resolvedAudioUrl.isEmpty() ? resolvedAudioUrl : resolvedVideoUrl;
                     if (stream.isEmpty()) throw new Exception("NO_AUDIO_STREAM");
-                    downloadFile(stream, resolvedUA, finalTempFile, jobId, "extracting", 5, 96, cancelled);
+                    File rawAudioTmp = new File(workDir, "raw_audio_src.bin");
+                    downloadFile(stream, resolvedUA, rawAudioTmp, jobId, "extracting", 5, 88, cancelled);
+                    if (cancelled.get()) throw new Exception("CANCELLED");
+                    emitProgress(jobId, "extracting", 92, null, 1);
+                    if (filename.toLowerCase(Locale.US).endsWith(".m4a") && demuxAudioToM4a(rawAudioTmp, finalTempFile)) {
+                        rawAudioTmp.delete();
+                    } else {
+                        copyFile(rawAudioTmp, finalTempFile);
+                        rawAudioTmp.delete();
+                    }
+                    emitProgress(jobId, "extracting", 96, null, 1);
                 } else {
                     if (resolvedVideoUrl.isEmpty()) throw new Exception("NO_VIDEO_STREAM");
                     boolean needsMux = !resolvedAudioUrl.isEmpty() && !resolvedAudioUrl.equals(resolvedVideoUrl);
@@ -348,7 +393,19 @@ public class TanzeelatiMediaPlugin extends Plugin {
             if (tw != null) return tw;
         }
 
-        // 3. YouTube
+        // 3. Facebook (handles share/r, share/v, fb.watch, fb.me, Reels, Watch, mbasic, plugins/video.php)
+        if (lower.contains("facebook.com") || lower.contains("fb.watch") || lower.contains("fb.com") || lower.contains("fb.me")) {
+            JSObject fb = resolveFacebook(targetUrl);
+            if (fb != null) return fb;
+        }
+
+        // 4. Instagram (/reel/, /p/, /share/, /embed/)
+        if (lower.contains("instagram.com") || lower.contains("instagr.am")) {
+            JSObject ig = resolveInstagram(targetUrl);
+            if (ig != null) return ig;
+        }
+
+        // 5. YouTube
         String ytId = extractYouTubeId(targetUrl);
         if (ytId != null) {
             JSObject yt = resolveYouTubeInnerTube(ytId, targetUrl);
@@ -357,19 +414,19 @@ public class TanzeelatiMediaPlugin extends Plugin {
             if (piped != null) return piped;
         }
 
-        // 4. Direct media links (.mp4, .mp3, .m4a, .webm, etc.)
+        // 6. Direct media links (.mp4, .mp3, .m4a, .webm, etc.)
         if (lower.matches(".*\\.(mp4|m4v|mov|webm|mp3|m4a|aac|wav|ogg)(\\?.*|$)")) {
             return buildDirectResult(targetUrl, "رابط مباشر", "Direct Media", isAudioUrl(lower));
         }
 
-        // 5. Instagram / Facebook / generic HTML extraction natively without CORS
+        // 7. Generic HTML social extraction fallback
         JSObject htmlRes = resolveSocialPageHtml(targetUrl);
         if (htmlRes != null) return htmlRes;
 
-        // 6. Content-Type probe fallback
+        // 8. Content-Type probe fallback
         HttpURLConnection headConn = null;
         try {
-            headConn = openConnectionFollowingRedirects(targetUrl, MOBILE_CHROME_UA, 6000, "HEAD");
+            headConn = openConnectionFollowingRedirects(targetUrl, DESKTOP_CHROME_UA, 6000, "HEAD");
             String ct = headConn.getContentType();
             if (ct != null && (ct.startsWith("video/") || ct.startsWith("audio/"))) {
                 return buildDirectResult(headConn.getURL().toString(), "رابط مباشر", "Direct Media", ct.startsWith("audio/"));
@@ -859,26 +916,528 @@ public class TanzeelatiMediaPlugin extends Plugin {
         return null;
     }
 
-    private JSObject resolveSocialPageHtml(String targetUrl) {
-        HttpURLConnection conn = null;
-        try {
-            conn = openConnectionFollowingRedirects(targetUrl, MOBILE_CHROME_UA, 8500, "GET");
-            String ct = conn.getContentType();
-            if (ct != null && (ct.startsWith("video/") || ct.startsWith("audio/"))) {
-                return buildDirectResult(conn.getURL().toString(), "رابط مباشر", "Direct Media", ct.startsWith("audio/"));
-            }
-            String html = readStreamAsString(conn.getInputStream());
-            if (html == null || html.isEmpty()) return null;
+    private static class PageFetchResult {
+        final String html;
+        final String finalUrl;
+        final String loginNextUrl;
+        PageFetchResult(String html, String finalUrl, String loginNextUrl) {
+            this.html = html;
+            this.finalUrl = finalUrl;
+            this.loginNextUrl = loginNextUrl;
+        }
+    }
 
-            String finalUrl = conn.getURL().toString();
+    private static String unwrapFacebookLoginNext(String rawUrl) {
+        if (rawUrl == null || rawUrl.isEmpty()) return null;
+        try {
+            URL u = new URL(rawUrl);
+            if (u.getHost().toLowerCase(Locale.US).endsWith("facebook.com") && u.getPath().contains("/login")) {
+                String q = u.getQuery();
+                if (q != null) {
+                    for (String p : q.split("&")) {
+                        if (p.startsWith("next=")) {
+                            String decoded = URLDecoder.decode(p.substring(5), "UTF-8");
+                            if (decoded.startsWith("http")) return decoded;
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private PageFetchResult fetchHtmlWithCookies(String targetUrl, String ua, String referer) {
+        Map<String, String> cookies = new LinkedHashMap<>();
+        String current = targetUrl;
+        String loginNextUrl = null;
+        for (int hop = 0; hop < 8; hop++) {
+            String unwrappedHere = unwrapFacebookLoginNext(current);
+            if (unwrappedHere != null) loginNextUrl = unwrappedHere;
+
+            HttpURLConnection conn = null;
+            try {
+                URL u = new URL(current);
+                conn = (HttpURLConnection) u.openConnection();
+                conn.setInstanceFollowRedirects(false);
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(12000);
+                conn.setRequestProperty("User-Agent", ua);
+                conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+                conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9,ar;q=0.8");
+                conn.setRequestProperty("Sec-Fetch-Dest", "document");
+                conn.setRequestProperty("Sec-Fetch-Mode", "navigate");
+                conn.setRequestProperty("Sec-Fetch-Site", referer != null ? "same-origin" : "none");
+                conn.setRequestProperty("Sec-Fetch-User", "?1");
+                conn.setRequestProperty("Upgrade-Insecure-Requests", "1");
+                if (referer != null && !referer.isEmpty()) {
+                    conn.setRequestProperty("Referer", referer);
+                }
+                if (!cookies.isEmpty()) {
+                    StringBuilder sb = new StringBuilder();
+                    for (Map.Entry<String, String> e : cookies.entrySet()) {
+                        if (sb.length() > 0) sb.append("; ");
+                        sb.append(e.getKey()).append("=").append(e.getValue());
+                    }
+                    conn.setRequestProperty("Cookie", sb.toString());
+                }
+
+                Map<String, List<String>> hdrs = conn.getHeaderFields();
+                if (hdrs != null) {
+                    for (Map.Entry<String, List<String>> entry : hdrs.entrySet()) {
+                        if (entry.getKey() != null && entry.getKey().equalsIgnoreCase("Set-Cookie") && entry.getValue() != null) {
+                            for (String sc : entry.getValue()) {
+                                String pair = sc.split(";")[0].trim();
+                                int eq = pair.indexOf('=');
+                                if (eq > 0) {
+                                    cookies.put(pair.substring(0, eq), pair.substring(eq + 1));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                int code = conn.getResponseCode();
+                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                    String loc = conn.getHeaderField("Location");
+                    conn.disconnect();
+                    if (loc == null || loc.isEmpty()) break;
+                    String nextHop = new URL(u, loc).toString();
+                    String nextU = unwrapFacebookLoginNext(nextHop);
+                    if (nextU != null) loginNextUrl = nextU;
+                    current = nextHop;
+                    continue;
+                }
+                if (code < 200 || code >= 300) {
+                    return loginNextUrl != null ? new PageFetchResult("", current, loginNextUrl) : null;
+                }
+                String body = readStreamAsString(conn.getInputStream());
+                return new PageFetchResult(body, current, loginNextUrl);
+            } catch (Exception ignored) {
+                return loginNextUrl != null ? new PageFetchResult("", current, loginNextUrl) : null;
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }
+        return loginNextUrl != null ? new PageFetchResult("", current, loginNextUrl) : null;
+    }
+
+    private static class DashParsed {
+        String videoUrl = "";
+        String audioUrl = "";
+        int durationSec = 0;
+    }
+
+    private DashParsed parseFacebookDashManifest(String html) {
+        DashParsed result = new DashParsed();
+        String xml = "";
+        Matcher dm = Pattern.compile("\"dash_manifest(?:_xml_string)?\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", Pattern.CASE_INSENSITIVE).matcher(html);
+        if (dm.find()) {
+            xml = unescapeHtmlAndJson(dm.group(1)).replace("\\n", "\n");
+        } else if (html.contains("<MPD") && html.contains("<BaseURL>")) {
+            xml = unescapeHtmlAndJson(html);
+        }
+        if (xml.isEmpty() || !xml.contains("<BaseURL>")) return result;
+
+        Matcher durM = Pattern.compile("mediaPresentationDuration=\"PT(?:(\\d+)H)?(?:(\\d+)M)?([\\d.]+)S\"", Pattern.CASE_INSENSITIVE).matcher(xml);
+        if (durM.find()) {
+            try {
+                int h = durM.group(1) != null ? Integer.parseInt(durM.group(1)) : 0;
+                int m = durM.group(2) != null ? Integer.parseInt(durM.group(2)) : 0;
+                double s = Double.parseDouble(durM.group(3));
+                result.durationSec = (int) Math.round(h * 3600 + m * 60 + s);
+            } catch (Exception ignored) {}
+        }
+
+        String bestAvcVideo = "";
+        long bestAvcScore = -1;
+        String bestAnyVideo = "";
+        long bestAnyScore = -1;
+        String bestAudio = "";
+        long bestAudioScore = -1;
+
+        Matcher asetM = Pattern.compile("<AdaptationSet\\b([^>]*)>([\\s\\S]*?)</AdaptationSet>", Pattern.CASE_INSENSITIVE).matcher(xml);
+        while (asetM.find()) {
+            String asetAttrs = asetM.group(1) != null ? asetM.group(1) : "";
+            String asetBody = asetM.group(2) != null ? asetM.group(2) : "";
+            boolean isAudioSet = asetAttrs.toLowerCase(Locale.US).contains("contenttype=\"audio\"") || asetAttrs.toLowerCase(Locale.US).contains("mimetype=\"audio/");
+            boolean isVideoSet = asetAttrs.toLowerCase(Locale.US).contains("contenttype=\"video\"") || asetAttrs.toLowerCase(Locale.US).contains("mimetype=\"video/");
+
+            Matcher repM = Pattern.compile("<Representation\\b([^>]*)>([\\s\\S]*?)</Representation>", Pattern.CASE_INSENSITIVE).matcher(asetBody);
+            while (repM.find()) {
+                String repAttrs = repM.group(1) != null ? repM.group(1) : "";
+                String repBody = repM.group(2) != null ? repM.group(2) : "";
+                String baseRaw = firstMatch(repBody, "<BaseURL>([^<]+)</BaseURL>");
+                if (baseRaw == null) continue;
+                String baseUrl = unescapeHtmlAndJson(baseRaw);
+                if (!baseUrl.startsWith("http")) continue;
+
+                long bw = parseLongSafe(firstMatch(repAttrs, "bandwidth=[\"'](\\d+)[\"']"));
+                long height = parseLongSafe(firstMatch(repAttrs, "height=[\"'](\\d+)[\"']"));
+                String codecs = firstMatch(repAttrs, "codecs=[\"']([^\"']+)[\"']");
+                if (codecs == null) codecs = "";
+                String mime = firstMatch(repAttrs, "mimeType=[\"']([^\"']+)[\"']");
+                if (mime == null) mime = "";
+                String cl = codecs.toLowerCase(Locale.US);
+                String ml = mime.toLowerCase(Locale.US);
+
+                boolean repAudio = isAudioSet || ml.contains("audio/") || cl.contains("mp4a") || cl.contains("opus");
+                boolean repVideo = isVideoSet || ml.contains("video/") || cl.contains("avc1") || cl.contains("av01") || cl.contains("vp9") || cl.contains("vp09") || cl.contains("hev1");
+
+                if (repAudio && !repVideo) {
+                    long aScore = (cl.contains("mp4a") ? 10_000_000L : 0L) + bw;
+                    if (aScore > bestAudioScore) {
+                        bestAudioScore = aScore;
+                        bestAudio = baseUrl;
+                    }
+                } else if (repVideo) {
+                    long vScore = height * 100_000L + bw;
+                    if (cl.contains("avc1") && vScore > bestAvcScore) {
+                        bestAvcScore = vScore;
+                        bestAvcVideo = baseUrl;
+                    }
+                    if (vScore > bestAnyScore) {
+                        bestAnyScore = vScore;
+                        bestAnyVideo = baseUrl;
+                    }
+                }
+            }
+        }
+
+        result.videoUrl = !bestAvcVideo.isEmpty() ? bestAvcVideo : bestAnyVideo;
+        result.audioUrl = bestAudio;
+        return result;
+    }
+
+    private JSObject extractFacebookMedia(String html, String originalUrl) throws Exception {
+        String hdRaw = firstMatch(html,
+            "\"browser_native_hd_url\"\\s*:\\s*\"([^\"]+)\"",
+            "\"playable_url_quality_hd\"\\s*:\\s*\"([^\"]+)\"",
+            "\"hd_src_no_ratelimit\"\\s*:\\s*\"([^\"]+)\"",
+            "\"hd_src\"\\s*:\\s*\"([^\"]+)\""
+        );
+        String sdRaw = firstMatch(html,
+            "\"browser_native_sd_url\"\\s*:\\s*\"([^\"]+)\"",
+            "\"playable_url\"\\s*:\\s*\"([^\"]+)\"",
+            "\"sd_src_no_ratelimit\"\\s*:\\s*\"([^\"]+)\"",
+            "\"sd_src\"\\s*:\\s*\"([^\"]+)\"",
+            "<meta[^>]+property=[\"']og:video(?::secure_url)?[\"'][^>]+content=[\"']([^\"']+)[\"']",
+            "<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+property=[\"']og:video(?::secure_url)?[\"']"
+        );
+
+        String hdUrl = hdRaw != null ? unescapeHtmlAndJson(hdRaw) : "";
+        if (!hdUrl.startsWith("http")) hdUrl = "";
+        String sdUrl = sdRaw != null ? unescapeHtmlAndJson(sdRaw) : "";
+        if (!sdUrl.startsWith("http")) sdUrl = "";
+
+        if (hdUrl.isEmpty() || sdUrl.isEmpty()) {
+            Matcher pm = Pattern.compile("\"progressive_url\"\\s*:\\s*\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(html);
+            while (pm.find()) {
+                String cand = unescapeHtmlAndJson(pm.group(1));
+                if (!cand.startsWith("http")) continue;
+                int s = Math.max(0, pm.start() - 180);
+                int e = Math.min(html.length(), pm.end() + 180);
+                String ctx = html.substring(s, e);
+                if (Pattern.compile("\"quality\"\\s*:\\s*\"HD\"", Pattern.CASE_INSENSITIVE).matcher(ctx).find()) {
+                    if (hdUrl.isEmpty()) hdUrl = cand;
+                } else if (sdUrl.isEmpty()) {
+                    sdUrl = cand;
+                }
+            }
+        }
+
+        if (hdUrl.isEmpty() && sdUrl.isEmpty()) {
+            String redirSrc = firstMatch(html, "/video_redirect/\\?src=([^\"'&<>\\s]+)");
+            if (redirSrc != null && !redirSrc.isEmpty()) {
+                try {
+                    String dec = URLDecoder.decode(unescapeHtmlAndJson(redirSrc), "UTF-8");
+                    if (dec.startsWith("http")) sdUrl = dec;
+                } catch (Exception ignored) {}
+            }
+        }
+
+        DashParsed dash = parseFacebookDashManifest(html);
+        String audioUrl = "";
+        if (hdUrl.isEmpty() && sdUrl.isEmpty() && !dash.videoUrl.isEmpty()) {
+            sdUrl = dash.videoUrl;
+            audioUrl = dash.audioUrl;
+        }
+
+        if (hdUrl.isEmpty() && sdUrl.isEmpty()) return null;
+
+        String bestStream = !hdUrl.isEmpty() ? hdUrl : sdUrl;
+        String sdStream = !sdUrl.isEmpty() ? sdUrl : hdUrl;
+
+        int durSec = 0;
+        String msDur = firstMatch(html, "\"playable_duration_in_ms\"\\s*:\\s*(\\d+)");
+        if (msDur != null) {
+            durSec = (int) Math.round(parseLongSafe(msDur) / 1000.0);
+        }
+        if (durSec <= 0) durSec = dash.durationSec;
+
+        String title = firstMatch(html,
+            "<meta[^>]+property=[\"']og:title[\"'][^>]+content=[\"']([^\"']+)[\"']",
+            "<meta[^>]+name=[\"']twitter:title[\"'][^>]+content=[\"']([^\"']+)[\"']",
+            "<title>([^<]+)</title>"
+        );
+        if (title != null) {
+            title = unescapeHtmlAndJson(title).replaceAll("\\s*\\|\\s*Facebook$", "").trim();
+        }
+        if (title == null || title.isEmpty() || title.equalsIgnoreCase("Facebook")) {
+            title = "Facebook Video";
+        }
+
+        String thumb = firstMatch(html,
+            "<meta[^>]+property=[\"']og:image[\"'][^>]+content=[\"']([^\"']+)[\"']",
+            "\"preferred_thumbnail\"\\s*:\\s*\\{[^}]*\"image\"\\s*:\\s*\\{\\s*\"uri\"\\s*:\\s*\"([^\"]+)\""
+        );
+        thumb = thumb != null ? unescapeHtmlAndJson(thumb) : "";
+
+        long hdBytes = !hdUrl.isEmpty() ? probeContentLength(hdUrl, DESKTOP_CHROME_UA) : 0L;
+        long sdBytes = !sdUrl.isEmpty() && !sdUrl.equals(hdUrl) ? probeContentLength(sdUrl, DESKTOP_CHROME_UA) : hdBytes;
+
+        JSArray vOpts = new JSArray();
+        if (!hdUrl.isEmpty()) {
+            JSObject opt = new JSObject();
+            opt.put("key", "best");
+            opt.put("labelAr", "جودة عالية (HD · MP4)");
+            opt.put("labelEn", "High Quality (HD · MP4)");
+            opt.put("descAr", "MP4 · أعلى دقة من فيسبوك");
+            opt.put("descEn", "MP4 · Facebook HD");
+            opt.put("sizeText", hdBytes > 0 ? formatBytes(hdBytes, true) : "—");
+            if (hdBytes > 0) opt.put("sizeBytes", hdBytes);
+            opt.put("directUrl", hdUrl);
+            if (!audioUrl.isEmpty()) opt.put("audioUrl", audioUrl);
+            opt.put("userAgent", DESKTOP_CHROME_UA);
+            vOpts.put(opt);
+        }
+        if (!sdUrl.isEmpty() && !sdUrl.equals(hdUrl)) {
+            JSObject opt = new JSObject();
+            opt.put("key", !hdUrl.isEmpty() ? "480" : "best");
+            opt.put("labelAr", !hdUrl.isEmpty() ? "جودة قياسية (SD · MP4)" : "أفضل جودة متاحة (MP4)");
+            opt.put("labelEn", !hdUrl.isEmpty() ? "Standard Quality (SD · MP4)" : "Best Available (MP4)");
+            opt.put("descAr", !hdUrl.isEmpty() ? "MP4 · حجم أقل" : "MP4 · حفظ مباشر");
+            opt.put("descEn", !hdUrl.isEmpty() ? "MP4 · Compact Size" : "MP4 · Direct Save");
+            opt.put("sizeText", sdBytes > 0 ? formatBytes(sdBytes, true) : "—");
+            if (sdBytes > 0) opt.put("sizeBytes", sdBytes);
+            opt.put("directUrl", sdUrl);
+            if (!audioUrl.isEmpty()) opt.put("audioUrl", audioUrl);
+            opt.put("userAgent", DESKTOP_CHROME_UA);
+            vOpts.put(opt);
+        }
+
+        String effAudio = !audioUrl.isEmpty() ? audioUrl : sdStream;
+        JSObject out = new JSObject();
+        out.put("url", originalUrl);
+        out.put("title", title.length() > 85 ? title.substring(0, 85) : title);
+        out.put("author", "Facebook");
+        out.put("duration", durSec > 0 ? formatDuration(durSec) : "—");
+        out.put("durationSec", durSec);
+        out.put("thumbnail", thumb.startsWith("http") ? thumb : "");
+        out.put("platformAr", "فيسبوك");
+        out.put("platformEn", "Facebook");
+        out.put("engine", "direct");
+        out.put("videoOptions", vOpts);
+        out.put("audioOptions", buildAudioOptions(durSec, effAudio, DESKTOP_CHROME_UA, 0L));
+        out.put("fallbackStreamUrl", bestStream);
+        out.put("fallbackAudioUrl", effAudio);
+        out.put("previewUrl", sdStream);
+        return out;
+    }
+
+    private JSObject resolveFacebook(String targetUrl) {
+        try {
+            List<String[]> candidates = new ArrayList<>();
+            List<String> discoveredUrls = new ArrayList<>();
+            discoveredUrls.add(targetUrl);
+            String canonical = targetUrl;
+
+            PageFetchResult p1 = fetchHtmlWithCookies(targetUrl, DESKTOP_CHROME_UA, null);
+            if (p1 != null) {
+                if (p1.loginNextUrl != null && !p1.loginNextUrl.isEmpty()) {
+                    discoveredUrls.add(p1.loginNextUrl);
+                    canonical = p1.loginNextUrl;
+                } else if (p1.finalUrl != null && !p1.finalUrl.isEmpty()) {
+                    discoveredUrls.add(p1.finalUrl);
+                    canonical = p1.finalUrl;
+                }
+
+                if (p1.html != null && !p1.html.isEmpty()) {
+                    JSObject found1 = extractFacebookMedia(p1.html, targetUrl);
+                    if (found1 != null) return found1;
+
+                    String ogUrl = firstMatch(p1.html,
+                        "<meta[^>]+property=[\"']og:url[\"'][^>]+content=[\"']([^\"']+)[\"']",
+                        "<link[^>]+rel=[\"']canonical[\"'][^>]+href=[\"']([^\"']+)[\"']",
+                        "<meta[^>]+http-equiv=[\"']refresh[\"'][^>]+content=[\"'][^\"']*url=([^\"'\\s>]+)"
+                    );
+                    if (ogUrl != null) {
+                        String cu = unescapeHtmlAndJson(ogUrl);
+                        if (cu.startsWith("http") && !cu.contains("/login")) {
+                            discoveredUrls.add(cu);
+                            if (canonical.equals(targetUrl) || canonical.contains("/share/") || canonical.contains("/login")) {
+                                canonical = cu;
+                            }
+                        }
+                    }
+
+                    String bodyVid = firstMatch(p1.html,
+                        "\"(?:video_id|story_fbid|shareable_id)\"\\s*:\\s*\"(\\d{8,})\"",
+                        "facebook\\.com(?:\\\\)?/(?:reel|videos)(?:\\\\)?/(\\d{8,})"
+                    );
+                    if (bodyVid != null && !bodyVid.isEmpty()) {
+                        discoveredUrls.add("https://www.facebook.com/watch/?v=" + bodyVid);
+                        discoveredUrls.add("https://www.facebook.com/reel/" + bodyVid);
+                    }
+                }
+            }
+
+            String bestNonLogin = null;
+            for (String u : discoveredUrls) {
+                if (!u.contains("/login") && Pattern.compile("/(?:reel|videos|watch)", Pattern.CASE_INSENSITIVE).matcher(u).find()) {
+                    bestNonLogin = u;
+                    break;
+                }
+            }
+            if (bestNonLogin == null) {
+                bestNonLogin = canonical.contains("/login") ? targetUrl : canonical;
+            }
+
+            if (!bestNonLogin.contains("plugins/video.php")) {
+                String plugUrl = "https://www.facebook.com/plugins/video.php?href=" + URLEncoder.encode(bestNonLogin, "UTF-8") + "&show_text=0&width=560";
+                candidates.add(new String[] { plugUrl, DESKTOP_CHROME_UA });
+                candidates.add(new String[] { plugUrl, FB_EXTERNAL_HIT_UA });
+            }
+
+            candidates.add(new String[] { bestNonLogin, FB_EXTERNAL_HIT_UA });
+            if (!bestNonLogin.equals(targetUrl)) {
+                candidates.add(new String[] { targetUrl, FB_EXTERNAL_HIT_UA });
+                candidates.add(new String[] { bestNonLogin, DESKTOP_CHROME_UA });
+            }
+
+            String idHaystack = String.join(" ", discoveredUrls);
+            Matcher idM = Pattern.compile("(?:\\/(?:videos?|reel|reels|stories)\\/|story_fbid=|watch\\/?\\?v=)(\\d{8,})", Pattern.CASE_INSENSITIVE).matcher(idHaystack);
+            if (idM.find()) {
+                String vidId = idM.group(1);
+                String watchPlug = "https://www.facebook.com/plugins/video.php?href=" + URLEncoder.encode("https://www.facebook.com/watch/?v=" + vidId, "UTF-8") + "&show_text=0&width=560";
+                candidates.add(new String[] { watchPlug, DESKTOP_CHROME_UA });
+                candidates.add(new String[] { "https://www.facebook.com/watch/?v=" + vidId, FB_EXTERNAL_HIT_UA });
+                candidates.add(new String[] { "https://www.facebook.com/watch/?v=" + vidId, DESKTOP_CHROME_UA });
+                candidates.add(new String[] { "https://www.facebook.com/reel/" + vidId, FB_EXTERNAL_HIT_UA });
+                candidates.add(new String[] { "https://mbasic.facebook.com/watch/?v=" + vidId, MOBILE_CHROME_UA });
+            }
+
+            try {
+                URL cu = new URL(bestNonLogin);
+                if (!cu.getHost().startsWith("mbasic.")) {
+                    candidates.add(new String[] { bestNonLogin.replaceFirst("://[^/]+", "://mbasic.facebook.com"), MOBILE_CHROME_UA });
+                }
+            } catch (Exception ignored) {}
+
+            Set<String> visited = new HashSet<>();
+            for (String[] cand : candidates) {
+                String key = cand[1] + "::" + cand[0];
+                if (visited.contains(key)) continue;
+                visited.add(key);
+                PageFetchResult res = fetchHtmlWithCookies(cand[0], cand[1], "https://www.facebook.com/");
+                if (res != null && res.html != null && !res.html.isEmpty()) {
+                    JSObject found = extractFacebookMedia(res.html, targetUrl);
+                    if (found != null) return found;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private JSObject resolveInstagram(String targetUrl) {
+        try {
+            PageFetchResult p1 = fetchHtmlWithCookies(targetUrl, DESKTOP_CHROME_UA, null);
+            String finalUrl = (p1 != null && p1.finalUrl != null) ? p1.finalUrl : targetUrl;
+            List<String> htmls = new ArrayList<>();
+            if (p1 != null && p1.html != null) htmls.add(p1.html);
+
+            Matcher igM = Pattern.compile("/(reel|reels|p|tv)/([A-Za-z0-9_-]+)").matcher(finalUrl);
+            if (igM.find()) {
+                String[] embedUrls = {
+                    "https://www.instagram.com/" + igM.group(1) + "/" + igM.group(2) + "/embed/captioned/",
+                    "https://www.instagram.com/" + igM.group(1) + "/" + igM.group(2) + "/embed/"
+                };
+                for (String ep : embedUrls) {
+                    PageFetchResult er = fetchHtmlWithCookies(ep, DESKTOP_CHROME_UA, "https://www.instagram.com/");
+                    if (er != null && er.html != null) htmls.add(er.html);
+                }
+            }
+
+            for (String h : htmls) {
+                String raw = firstMatch(h,
+                    "<meta[^>]+property=[\"']og:video:secure_url[\"'][^>]+content=[\"']([^\"']+)[\"']",
+                    "<meta[^>]+property=[\"']og:video[\"'][^>]+content=[\"']([^\"']+)[\"']",
+                    "\"video_url\"\\s*:\\s*\"([^\"]+)\"",
+                    "<video[^>]+src=[\"']([^\"']+)[\"']"
+                );
+                if (raw == null) continue;
+                String clean = unescapeHtmlAndJson(raw);
+                if (!clean.startsWith("http")) continue;
+
+                long bytes = probeContentLength(clean, DESKTOP_CHROME_UA);
+                String title = firstMatch(h,
+                    "<meta[^>]+property=[\"']og:title[\"'][^>]+content=[\"']([^\"']+)[\"']",
+                    "<title>([^<]+)</title>"
+                );
+                title = title != null ? unescapeHtmlAndJson(title).trim() : "Instagram Video";
+                if (title.isEmpty()) title = "Instagram Video";
+                String thumb = firstMatch(h, "<meta[^>]+property=[\"']og:image[\"'][^>]+content=[\"']([^\"']+)[\"']");
+                thumb = thumb != null ? unescapeHtmlAndJson(thumb) : "";
+
+                JSArray vOpts = new JSArray();
+                JSObject opt = new JSObject();
+                opt.put("key", "best");
+                opt.put("labelAr", "أفضل جودة متاحة (MP4)");
+                opt.put("labelEn", "Best Available Quality (MP4)");
+                opt.put("descAr", "MP4 · حفظ مباشر");
+                opt.put("descEn", "MP4 · Direct Save");
+                opt.put("sizeText", bytes > 0 ? formatBytes(bytes, true) : "—");
+                if (bytes > 0) opt.put("sizeBytes", bytes);
+                opt.put("directUrl", clean);
+                opt.put("userAgent", DESKTOP_CHROME_UA);
+                vOpts.put(opt);
+
+                JSObject out = new JSObject();
+                out.put("url", targetUrl);
+                out.put("title", title.length() > 85 ? title.substring(0, 85) : title);
+                out.put("author", "Instagram");
+                out.put("duration", "—");
+                out.put("durationSec", 0);
+                out.put("thumbnail", thumb.startsWith("http") ? thumb : "");
+                out.put("platformAr", "إنستغرام");
+                out.put("platformEn", "Instagram");
+                out.put("engine", "direct");
+                out.put("videoOptions", vOpts);
+                out.put("audioOptions", buildAudioOptions(0, clean, DESKTOP_CHROME_UA, 0L));
+                out.put("fallbackStreamUrl", clean);
+                out.put("fallbackAudioUrl", clean);
+                out.put("previewUrl", clean);
+                return out;
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private JSObject resolveSocialPageHtml(String targetUrl) {
+        try {
+            PageFetchResult fetched = fetchHtmlWithCookies(targetUrl, MOBILE_CHROME_UA, null);
+            if (fetched == null || fetched.html == null || fetched.html.isEmpty()) return null;
+            String html = fetched.html;
+            String finalUrl = fetched.finalUrl != null ? fetched.finalUrl : targetUrl;
             String lower = finalUrl.toLowerCase(Locale.US);
             String platAr = "فيديو";
             String platEn = "Video";
             if (lower.contains("instagram.com")) { platAr = "إنستغرام"; platEn = "Instagram"; }
-            else if (lower.contains("facebook.com") || lower.contains("fb.watch")) { platAr = "فيسبوك"; platEn = "Facebook"; }
+            else if (lower.contains("facebook.com") || lower.contains("fb.watch") || lower.contains("fb.com")) { platAr = "فيسبوك"; platEn = "Facebook"; }
             else if (lower.contains("reddit.com")) { platAr = "ريديت"; platEn = "Reddit"; }
             else if (lower.contains("vimeo.com")) { platAr = "فيميو"; platEn = "Vimeo"; }
             else if (lower.contains("soundcloud.com")) { platAr = "ساوند كلاود"; platEn = "SoundCloud"; }
+            else if (lower.contains("threads.")) { platAr = "ثريدز"; platEn = "Threads"; }
 
             String videoUrl = firstMatch(html,
                 "<meta[^>]+property=[\"']og:video:secure_url[\"'][^>]+content=[\"']([^\"']+)[\"']",
@@ -892,27 +1451,6 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 "\"video_url\"\\s*:\\s*\"([^\"]+)\"",
                 "\"contentUrl\"\\s*:\\s*\"([^\"]+)\""
             );
-
-            // Fallback for Instagram embed endpoint if main page didn't expose video_url directly
-            if ((videoUrl == null || videoUrl.isEmpty()) && lower.contains("instagram.com")) {
-                Matcher igM = Pattern.compile("/(reel|reels|p|tv)/([A-Za-z0-9_-]+)").matcher(finalUrl);
-                if (igM.find()) {
-                    String embedUrl = "https://www.instagram.com/" + igM.group(1) + "/" + igM.group(2) + "/embed/captioned/";
-                    HttpURLConnection eConn = null;
-                    try {
-                        eConn = openConnectionFollowingRedirects(embedUrl, MOBILE_CHROME_UA, 7500, "GET");
-                        String eHtml = readStreamAsString(eConn.getInputStream());
-                        videoUrl = firstMatch(eHtml,
-                            "\"video_url\"\\s*:\\s*\"([^\"]+)\"",
-                            "<video[^>]+src=[\"']([^\"']+)[\"']",
-                            "\"playable_url\"\\s*:\\s*\"([^\"]+)\""
-                        );
-                    } catch (Exception ignored) {
-                    } finally {
-                        if (eConn != null) eConn.disconnect();
-                    }
-                }
-            }
 
             if (videoUrl == null || videoUrl.isEmpty()) return null;
             videoUrl = unescapeHtmlAndJson(videoUrl);
@@ -963,8 +1501,6 @@ public class TanzeelatiMediaPlugin extends Plugin {
             return out;
         } catch (Exception ignored) {
             return null;
-        } finally {
-            if (conn != null) conn.disconnect();
         }
     }
 
@@ -1063,8 +1599,19 @@ public class TanzeelatiMediaPlugin extends Plugin {
     ) throws Exception {
         HttpURLConnection conn = null;
         try {
-            conn = openConnectionFollowingRedirects(urlStr, userAgent, 15000, "GET");
+            String activeUa = (userAgent != null && !userAgent.trim().isEmpty()) ? userAgent : DESKTOP_CHROME_UA;
+            conn = openConnectionFollowingRedirects(urlStr, activeUa, 15000, "GET", true);
             int code = conn.getResponseCode();
+            if (code == 403 || code == 400) {
+                String[] retryUas = new String[] { FB_EXTERNAL_HIT_UA, MOBILE_CHROME_UA, DESKTOP_CHROME_UA };
+                boolean[] retryRefs = new boolean[] { false, false, false };
+                for (int r = 0; r < retryUas.length; r++) {
+                    conn.disconnect();
+                    conn = openConnectionFollowingRedirects(urlStr, retryUas[r], 15000, "GET", retryRefs[r]);
+                    code = conn.getResponseCode();
+                    if (code >= 200 && code < 300) break;
+                }
+            }
             if (code < 200 || code >= 300) {
                 throw new Exception("HTTP_" + code);
             }
@@ -1185,6 +1732,48 @@ public class TanzeelatiMediaPlugin extends Plugin {
         }
     }
 
+    private boolean demuxAudioToM4a(File inputMedia, File outM4a) {
+        MediaExtractor extractor = new MediaExtractor();
+        MediaMuxer muxer = null;
+        try {
+            extractor.setDataSource(inputMedia.getAbsolutePath());
+            int aTrackIdx = -1;
+            MediaFormat aFormat = null;
+            for (int i = 0; i < extractor.getTrackCount(); i++) {
+                MediaFormat fmt = extractor.getTrackFormat(i);
+                String mime = fmt.getString(MediaFormat.KEY_MIME);
+                if (mime != null && mime.startsWith("audio/")) {
+                    aTrackIdx = i;
+                    aFormat = fmt;
+                    break;
+                }
+            }
+            if (aTrackIdx < 0 || aFormat == null) return false;
+            extractor.selectTrack(aTrackIdx);
+            muxer = new MediaMuxer(outM4a.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+            int outATrack = muxer.addTrack(aFormat);
+            muxer.start();
+            ByteBuffer buffer = ByteBuffer.allocate(256 * 1024);
+            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+            while (true) {
+                int sampleSize = extractor.readSampleData(buffer, 0);
+                if (sampleSize < 0) break;
+                info.offset = 0;
+                info.size = sampleSize;
+                info.presentationTimeUs = extractor.getSampleTime();
+                info.flags = extractor.getSampleFlags();
+                muxer.writeSampleData(outATrack, buffer, info);
+                extractor.advance();
+            }
+            return outM4a.exists() && outM4a.length() > 0;
+        } catch (Exception ignored) {
+            return false;
+        } finally {
+            try { if (muxer != null) { muxer.stop(); muxer.release(); } } catch (Exception ignored) {}
+            try { extractor.release(); } catch (Exception ignored) {}
+        }
+    }
+
     private String saveToDownloads(File sourceFile, String filename, String mimeType) throws Exception {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ContentResolver resolver = getContext().getContentResolver();
@@ -1222,9 +1811,24 @@ public class TanzeelatiMediaPlugin extends Plugin {
         }
     }
 
+    private static String inferCdnReferer(String urlStr) {
+        if (urlStr == null) return null;
+        String lower = urlStr.toLowerCase(Locale.US);
+        if (lower.contains("fbcdn.net") || lower.contains("facebook.com")) return "https://www.facebook.com/";
+        if (lower.contains("cdninstagram.com") || lower.contains("instagram.com")) return "https://www.instagram.com/";
+        if (lower.contains("tiktok") || lower.contains("muscdn") || lower.contains("byteoversea")) return "https://www.tiktok.com/";
+        if (lower.contains("twimg.com") || lower.contains("twitter.com") || lower.contains("x.com")) return "https://x.com/";
+        return null;
+    }
+
     private HttpURLConnection openConnectionFollowingRedirects(String urlStr, String ua, int timeoutMs, String method) throws Exception {
+        return openConnectionFollowingRedirects(urlStr, ua, timeoutMs, method, true);
+    }
+
+    private HttpURLConnection openConnectionFollowingRedirects(String urlStr, String ua, int timeoutMs, String method, boolean sendReferer) throws Exception {
         String current = urlStr;
-        for (int i = 0; i < 6; i++) {
+        String referer = sendReferer ? inferCdnReferer(urlStr) : null;
+        for (int i = 0; i < 8; i++) {
             URL u = new URL(current);
             HttpURLConnection conn = (HttpURLConnection) u.openConnection();
             conn.setInstanceFollowRedirects(false);
@@ -1233,6 +1837,10 @@ public class TanzeelatiMediaPlugin extends Plugin {
             conn.setReadTimeout(timeoutMs);
             conn.setRequestProperty("User-Agent", ua);
             conn.setRequestProperty("Accept", "*/*");
+            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
+            if (referer != null) {
+                conn.setRequestProperty("Referer", referer);
+            }
             int code = conn.getResponseCode();
             if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
                 String loc = conn.getHeaderField("Location");
@@ -1248,11 +1856,11 @@ public class TanzeelatiMediaPlugin extends Plugin {
 
     private String readStreamAsString(InputStream in) throws Exception {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        byte[] buf = new byte[8192];
+        byte[] buf = new byte[16384];
         int len;
         while ((len = in.read(buf)) != -1) {
             bos.write(buf, 0, len);
-            if (bos.size() > 3 * 1024 * 1024) break;
+            if (bos.size() > 12 * 1024 * 1024) break;
         }
         return bos.toString(StandardCharsets.UTF_8.name());
     }
@@ -1279,12 +1887,28 @@ public class TanzeelatiMediaPlugin extends Plugin {
     private static String extractCleanUrl(String raw) {
         if (raw == null) return "";
         String t = raw.trim();
+        String extracted = t;
         Matcher m = Pattern.compile("(https?://[^\\s<>\"'{}|\\\\^`]+)", Pattern.CASE_INSENSITIVE).matcher(t);
-        if (m.find()) return m.group(1);
-        if (!t.startsWith("http://") && !t.startsWith("https://") && !t.isEmpty()) {
-            return "https://" + t;
+        if (m.find()) {
+            extracted = m.group(1);
+        } else if (!t.startsWith("http://") && !t.startsWith("https://") && !t.isEmpty()) {
+            extracted = "https://" + t;
         }
-        return t;
+        try {
+            URL u = new URL(extracted);
+            String host = u.getHost().toLowerCase(Locale.US);
+            if ("l.facebook.com".equals(host) || "lm.facebook.com".equals(host)) {
+                String q = u.getQuery();
+                if (q != null) {
+                    for (String p : q.split("&")) {
+                        if (p.startsWith("u=")) {
+                            return URLDecoder.decode(p.substring(2), "UTF-8");
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return extracted;
     }
 
     private static String extractYouTubeId(String rawUrl) {
@@ -1328,11 +1952,24 @@ public class TanzeelatiMediaPlugin extends Plugin {
 
     private static String unescapeHtmlAndJson(String s) {
         if (s == null) return "";
-        return s.replace("\\/", "/")
-                .replace("\\u0026", "&")
+        Matcher um = Pattern.compile("\\\\u([0-9a-fA-F]{4})").matcher(s);
+        StringBuffer sb = new StringBuffer();
+        while (um.find()) {
+            int code = Integer.parseInt(um.group(1), 16);
+            um.appendReplacement(sb, Matcher.quoteReplacement(String.valueOf((char) code)));
+        }
+        um.appendTail(sb);
+        return sb.toString()
+                .replace("\\/", "/")
+                .replace("\\\"", "\"")
                 .replace("&amp;", "&")
-                .replace("\\u003C", "<")
-                .replace("\\u003E", ">");
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#039;", "'")
+                .replace("&#x3A;", ":")
+                .replace("&#x2F;", "/")
+                .trim();
     }
 
     private static boolean isAudioUrl(String lower) {
@@ -1387,6 +2024,10 @@ public class TanzeelatiMediaPlugin extends Plugin {
                 rng.setReadTimeout(3200);
                 rng.setRequestProperty("User-Agent", ua != null && !ua.isEmpty() ? ua : MOBILE_CHROME_UA);
                 rng.setRequestProperty("Range", "bytes=0-0");
+                String cdnRef = inferCdnReferer(current);
+                if (cdnRef != null) {
+                    rng.setRequestProperty("Referer", cdnRef);
+                }
                 int code = rng.getResponseCode();
                 if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
                     String loc = rng.getHeaderField("Location");
@@ -1429,5 +2070,500 @@ public class TanzeelatiMediaPlugin extends Plugin {
             return String.format(Locale.US, mb >= 100.0 ? "%s%.0f MB" : "%s%.1f MB", prefix, mb);
         }
         return String.format(Locale.US, "%s%d KB", prefix, Math.max(1, Math.round(bytes / 1024.0)));
+    }
+
+    // ==================== WhatsApp Statuses Reader & Saver (SAF + Legacy) ====================
+
+    private static final String[] LEGACY_WA_PATHS = new String[] {
+        "Android/media/com.whatsapp/WhatsApp/Media/.Statuses",
+        "WhatsApp/Media/.Statuses",
+        "Android/media/com.whatsapp.w4b/WhatsApp Business/Media/.Statuses",
+        "WhatsApp Business/Media/.Statuses"
+    };
+
+    private List<String> getSavedWaTreeUris() {
+        List<String> out = new ArrayList<>();
+        try {
+            SharedPreferences sp = getContext().getSharedPreferences(WA_PREFS_NAME, Context.MODE_PRIVATE);
+            String raw = sp.getString(WA_TREE_URIS_KEY, "[]");
+            JSONArray arr = new JSONArray(raw);
+            List<UriPermission> persisted = getContext().getContentResolver().getPersistedUriPermissions();
+            Set<String> validPerms = new HashSet<>();
+            for (UriPermission p : persisted) {
+                if (p.isReadPermission()) validPerms.add(p.getUri().toString());
+            }
+            for (int i = 0; i < arr.length(); i++) {
+                String u = arr.optString(i, "");
+                if (!u.isEmpty() && validPerms.contains(u) && !out.contains(u)) {
+                    out.add(u);
+                }
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private void addSavedWaTreeUri(Uri treeUri) {
+        try {
+            List<String> existing = getSavedWaTreeUris();
+            String s = treeUri.toString();
+            if (!existing.contains(s)) existing.add(0, s);
+            JSONArray arr = new JSONArray();
+            for (String u : existing) arr.put(u);
+            getContext().getSharedPreferences(WA_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(WA_TREE_URIS_KEY, arr.toString())
+                .apply();
+        } catch (Exception ignored) {}
+    }
+
+    private List<File> getReadableLegacyStatusDirs() {
+        List<File> dirs = new ArrayList<>();
+        File extRoot = Environment.getExternalStorageDirectory();
+        if (extRoot == null) return dirs;
+        for (String rel : LEGACY_WA_PATHS) {
+            File f = new File(extRoot, rel);
+            if (f.exists() && f.isDirectory() && f.canRead()) {
+                File[] test = f.listFiles();
+                if (test != null) {
+                    dirs.add(f);
+                }
+            }
+        }
+        return dirs;
+    }
+
+    @PluginMethod
+    public void checkWhatsAppAccess(PluginCall call) {
+        List<String> trees = getSavedWaTreeUris();
+        if (!trees.isEmpty()) {
+            JSObject res = new JSObject();
+            res.put("hasAccess", true);
+            res.put("mode", "saf");
+            call.resolve(res);
+            return;
+        }
+        List<File> legacyDirs = getReadableLegacyStatusDirs();
+        if (!legacyDirs.isEmpty()) {
+            JSObject res = new JSObject();
+            res.put("hasAccess", true);
+            res.put("mode", "legacy");
+            call.resolve(res);
+            return;
+        }
+        JSObject res = new JSObject();
+        res.put("hasAccess", false);
+        res.put("mode", "none");
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void clearWhatsAppAccess(PluginCall call) {
+        try {
+            getContext().getSharedPreferences(WA_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .remove(WA_TREE_URIS_KEY)
+                .apply();
+        } catch (Exception ignored) {}
+        JSObject res = new JSObject();
+        res.put("ok", true);
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void requestWhatsAppFolderAccess(PluginCall call) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            if (getPermissionState("storage") == PermissionState.GRANTED || !getReadableLegacyStatusDirs().isEmpty()) {
+                executor.execute(() -> resolveWhatsAppListInternal(call, true));
+                return;
+            }
+            requestPermissionForAlias("storage", call, "handleStoragePermission");
+            return;
+        }
+        launchSafPicker(call);
+    }
+
+    @PermissionCallback
+    private void handleStoragePermission(PluginCall call) {
+        if (getPermissionState("storage") == PermissionState.GRANTED || !getReadableLegacyStatusDirs().isEmpty()) {
+            executor.execute(() -> resolveWhatsAppListInternal(call, true));
+        } else {
+            launchSafPicker(call);
+        }
+    }
+
+    private void launchSafPicker(PluginCall call) {
+        String appType = call.getString("appType", "whatsapp");
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(
+            Intent.FLAG_GRANT_READ_URI_PERMISSION |
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION |
+            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+        );
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            String docPath = "business".equals(appType)
+                ? "primary:Android/media/com.whatsapp.w4b/WhatsApp Business/Media/.Statuses"
+                : "primary:Android/media/com.whatsapp/WhatsApp/Media/.Statuses";
+            try {
+                File ext = Environment.getExternalStorageDirectory();
+                if (!"business".equals(appType) && ext != null) {
+                    File androidMedia = new File(ext, "Android/media/com.whatsapp/WhatsApp/Media/.Statuses");
+                    File oldWa = new File(ext, "WhatsApp/Media/.Statuses");
+                    if (!androidMedia.exists() && oldWa.exists()) {
+                        docPath = "primary:WhatsApp/Media/.Statuses";
+                    }
+                }
+            } catch (Exception ignored) {}
+            Uri initialUri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", docPath);
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri);
+        }
+        startActivityForResult(call, intent, "handleWhatsAppTreeResult");
+    }
+
+    @ActivityCallback
+    private void handleWhatsAppTreeResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+            JSObject out = new JSObject();
+            out.put("granted", false);
+            out.put("hasAccess", !getSavedWaTreeUris().isEmpty() || !getReadableLegacyStatusDirs().isEmpty());
+            out.put("items", new JSArray());
+            call.resolve(out);
+            return;
+        }
+        Uri treeUri = result.getData().getData();
+        try {
+            getContext().getContentResolver().takePersistableUriPermission(
+                treeUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            );
+            addSavedWaTreeUri(treeUri);
+        } catch (Exception e) {
+            call.reject("PERSIST_URI_FAILED");
+            return;
+        }
+        executor.execute(() -> resolveWhatsAppListInternal(call, true));
+    }
+
+    @PluginMethod
+    public void listWhatsAppStatuses(PluginCall call) {
+        executor.execute(() -> resolveWhatsAppListInternal(call, false));
+    }
+
+    private static class WaStatusItem {
+        String id;
+        String name;
+        String uri;
+        boolean isVideo;
+        String mimeType;
+        long sizeBytes;
+        long modifiedMs;
+        String thumbPath;
+        String sourceApp;
+    }
+
+    private void resolveWhatsAppListInternal(PluginCall call, boolean fromGrant) {
+        try {
+            List<String> treeUris = getSavedWaTreeUris();
+            List<File> legacyDirs = getReadableLegacyStatusDirs();
+            boolean hasAccess = !treeUris.isEmpty() || !legacyDirs.isEmpty();
+
+            if (!hasAccess) {
+                JSObject out = new JSObject();
+                if (fromGrant) out.put("granted", false);
+                out.put("hasAccess", false);
+                out.put("items", new JSArray());
+                call.resolve(out);
+                return;
+            }
+
+            Map<String, WaStatusItem> byId = new LinkedHashMap<>();
+            File thumbDir = new File(getContext().getCacheDir(), "wa_thumbs");
+            if (!thumbDir.exists()) thumbDir.mkdirs();
+
+            for (String treeStr : treeUris) {
+                Uri treeUri = Uri.parse(treeStr);
+                String rootDocId = DocumentsContract.getTreeDocumentId(treeUri);
+                String sourceApp = treeStr.toLowerCase(Locale.US).contains("w4b") || treeStr.toLowerCase(Locale.US).contains("business")
+                    ? "WhatsApp Business" : "WhatsApp";
+                scanSafFolder(treeUri, rootDocId, 0, sourceApp, thumbDir, byId);
+            }
+
+            for (File dir : legacyDirs) {
+                String sourceApp = dir.getAbsolutePath().toLowerCase(Locale.US).contains("business")
+                    ? "WhatsApp Business" : "WhatsApp";
+                File[] files = dir.listFiles();
+                if (files == null) continue;
+                for (File f : files) {
+                    if (!f.isFile() || f.length() <= 0) continue;
+                    String fname = f.getName();
+                    if (!isSupportedStatusName(fname)) continue;
+                    boolean isVid = isVideoFileName(fname);
+                    String id = sha1Short(f.getAbsolutePath() + "_" + f.length());
+                    WaStatusItem item = new WaStatusItem();
+                    item.id = id;
+                    item.name = fname;
+                    item.uri = Uri.fromFile(f).toString();
+                    item.isVideo = isVid;
+                    item.mimeType = inferStatusMime(fname, isVid);
+                    item.sizeBytes = f.length();
+                    item.modifiedMs = f.lastModified();
+                    item.sourceApp = sourceApp;
+                    item.thumbPath = ensureThumbnailFile(item.uri, id, isVid, thumbDir);
+                    byId.putIfAbsent(fname + "_" + item.sizeBytes, item);
+                }
+            }
+
+            List<WaStatusItem> sorted = new ArrayList<>(byId.values());
+            Collections.sort(sorted, (a, b) -> Long.compare(b.modifiedMs, a.modifiedMs));
+
+            JSArray arr = new JSArray();
+            for (WaStatusItem it : sorted) {
+                JSObject obj = new JSObject();
+                obj.put("id", it.id);
+                obj.put("name", it.name);
+                obj.put("uri", it.uri);
+                obj.put("isVideo", it.isVideo);
+                obj.put("mimeType", it.mimeType);
+                obj.put("sizeBytes", it.sizeBytes);
+                obj.put("sizeText", formatBytes(it.sizeBytes, true));
+                obj.put("modifiedMs", it.modifiedMs);
+                obj.put("thumbPath", it.thumbPath != null ? it.thumbPath : "");
+                obj.put("sourceApp", it.sourceApp);
+                arr.put(obj);
+            }
+
+            JSObject res = new JSObject();
+            if (fromGrant) res.put("granted", true);
+            res.put("hasAccess", true);
+            res.put("items", arr);
+            call.resolve(res);
+        } catch (Exception e) {
+            call.reject(e.getMessage() != null ? e.getMessage() : "WA_SCAN_FAILED");
+        }
+    }
+
+    private void scanSafFolder(
+        Uri treeUri,
+        String parentDocId,
+        int depth,
+        String sourceApp,
+        File thumbDir,
+        Map<String, WaStatusItem> byId
+    ) {
+        if (depth > 2) return;
+        ContentResolver resolver = getContext().getContentResolver();
+        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId);
+        String[] projection = new String[] {
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            DocumentsContract.Document.COLUMN_SIZE
+        };
+        try (Cursor c = resolver.query(childrenUri, projection, null, null, null)) {
+            if (c == null) return;
+            while (c.moveToNext()) {
+                String docId = c.getString(0);
+                String name = c.getString(1);
+                String mime = c.getString(2);
+                long mod = c.isNull(3) ? System.currentTimeMillis() : c.getLong(3);
+                long size = c.isNull(4) ? 0L : c.getLong(4);
+                if (name == null) continue;
+
+                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    String lowDir = name.toLowerCase(Locale.US);
+                    if (lowDir.contains("status") || lowDir.equals("media") || lowDir.contains("whatsapp")) {
+                        scanSafFolder(treeUri, docId, depth + 1, sourceApp, thumbDir, byId);
+                    }
+                    continue;
+                }
+
+                if (size <= 0 || !isSupportedStatusName(name)) continue;
+                boolean isVid = isVideoFileName(name) || (mime != null && mime.startsWith("video/"));
+                Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+                String id = sha1Short(docId + "_" + size);
+                WaStatusItem item = new WaStatusItem();
+                item.id = id;
+                item.name = name;
+                item.uri = fileUri.toString();
+                item.isVideo = isVid;
+                item.mimeType = (mime != null && !mime.isEmpty()) ? mime : inferStatusMime(name, isVid);
+                item.sizeBytes = size;
+                item.modifiedMs = mod;
+                item.sourceApp = sourceApp;
+                item.thumbPath = ensureThumbnailFile(item.uri, id, isVid, thumbDir);
+                byId.putIfAbsent(name + "_" + size, item);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private String ensureThumbnailFile(String uriStr, String id, boolean isVideo, File thumbDir) {
+        File outFile = new File(thumbDir, id + ".jpg");
+        if (outFile.exists() && outFile.length() > 0) {
+            return Uri.fromFile(outFile).toString();
+        }
+        Uri uri = Uri.parse(uriStr);
+        Bitmap bmp = null;
+        try {
+            if (isVideo) {
+                MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+                try {
+                    mmr.setDataSource(getContext(), uri);
+                    bmp = mmr.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                    if (bmp == null) bmp = mmr.getFrameAtTime();
+                } finally {
+                    try { mmr.release(); } catch (Exception ignored) {}
+                }
+            } else {
+                BitmapFactory.Options bounds = new BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                try (InputStream in = getContext().getContentResolver().openInputStream(uri)) {
+                    if (in != null) BitmapFactory.decodeStream(in, null, bounds);
+                }
+                int sample = 1;
+                int maxDim = Math.max(bounds.outWidth, bounds.outHeight);
+                while (maxDim / sample > 420) sample *= 2;
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inSampleSize = sample;
+                try (InputStream in = getContext().getContentResolver().openInputStream(uri)) {
+                    if (in != null) bmp = BitmapFactory.decodeStream(in, null, opts);
+                }
+            }
+            if (bmp != null) {
+                int w = bmp.getWidth();
+                int h = bmp.getHeight();
+                if (Math.max(w, h) > 400) {
+                    float scale = 400f / Math.max(w, h);
+                    Bitmap scaled = Bitmap.createScaledBitmap(bmp, Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)), true);
+                    if (scaled != bmp) bmp.recycle();
+                    bmp = scaled;
+                }
+                try (OutputStream out = new FileOutputStream(outFile)) {
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 78, out);
+                    out.flush();
+                }
+                bmp.recycle();
+                return Uri.fromFile(outFile).toString();
+            }
+        } catch (Exception ignored) {
+            if (bmp != null && !bmp.isRecycled()) bmp.recycle();
+        }
+        return null;
+    }
+
+    @PluginMethod
+    public void prepareWhatsAppPreview(PluginCall call) {
+        String uriStr = call.getString("uri", "");
+        String name = sanitizeFilename(call.getString("name", "status.mp4"));
+        if (uriStr == null || uriStr.isEmpty()) {
+            call.reject("EMPTY_URI");
+            return;
+        }
+        executor.execute(() -> {
+            try {
+                if (uriStr.startsWith("file://")) {
+                    JSObject res = new JSObject();
+                    res.put("previewPath", uriStr);
+                    call.resolve(res);
+                    return;
+                }
+                File pvDir = new File(getContext().getCacheDir(), "wa_preview");
+                if (!pvDir.exists()) pvDir.mkdirs();
+                File dest = new File(pvDir, sha1Short(uriStr) + "_" + name);
+                if (!dest.exists() || dest.length() == 0) {
+                    try (InputStream in = getContext().getContentResolver().openInputStream(Uri.parse(uriStr));
+                         OutputStream out = new FileOutputStream(dest)) {
+                        if (in == null) throw new Exception("OPEN_STREAM_FAILED");
+                        byte[] buf = new byte[16384];
+                        int n;
+                        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                        out.flush();
+                    }
+                }
+                JSObject res = new JSObject();
+                res.put("previewPath", Uri.fromFile(dest).toString());
+                call.resolve(res);
+            } catch (Exception e) {
+                call.reject(e.getMessage() != null ? e.getMessage() : "PREVIEW_FAILED");
+            }
+        });
+    }
+
+    @PluginMethod
+    public void saveWhatsAppStatus(PluginCall call) {
+        String uriStr = call.getString("uri", "");
+        String rawName = call.getString("filename", "status_media.jpg");
+        String mimeType = call.getString("mimeType", "image/jpeg");
+        if (uriStr == null || uriStr.isEmpty()) {
+            call.reject("EMPTY_URI");
+            return;
+        }
+        String safeName = sanitizeFilename(rawName);
+        executor.execute(() -> {
+            File tmp = new File(getContext().getCacheDir(), "wa_save_" + System.currentTimeMillis() + "_" + safeName);
+            try {
+                try (InputStream in = getContext().getContentResolver().openInputStream(Uri.parse(uriStr));
+                     OutputStream out = new FileOutputStream(tmp)) {
+                    if (in == null) throw new Exception("OPEN_STREAM_FAILED");
+                    byte[] buf = new byte[16384];
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                    out.flush();
+                }
+                String savedPath = saveToDownloads(tmp, safeName, mimeType);
+                long size = tmp.length();
+                JSObject res = new JSObject();
+                res.put("ok", true);
+                res.put("filename", safeName);
+                res.put("savedPath", savedPath);
+                res.put("fileSize", size);
+                call.resolve(res);
+            } catch (Exception e) {
+                call.reject(e.getMessage() != null ? e.getMessage() : "SAVE_STATUS_FAILED");
+            } finally {
+                if (tmp.exists()) tmp.delete();
+            }
+        });
+    }
+
+    private static boolean isSupportedStatusName(String name) {
+        if (name == null) return false;
+        String lower = name.toLowerCase(Locale.US);
+        if (lower.equals(".nomedia") || lower.startsWith(".")) return false;
+        return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp")
+            || lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".3gp") || lower.endsWith(".webm");
+    }
+
+    private static boolean isVideoFileName(String name) {
+        if (name == null) return false;
+        String lower = name.toLowerCase(Locale.US);
+        return lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".3gp") || lower.endsWith(".webm");
+    }
+
+    private static String inferStatusMime(String name, boolean isVid) {
+        String lower = name.toLowerCase(Locale.US);
+        if (isVid) {
+            if (lower.endsWith(".webm")) return "video/webm";
+            if (lower.endsWith(".3gp")) return "video/3gpp";
+            if (lower.endsWith(".mkv")) return "video/x-matroska";
+            return "video/mp4";
+        }
+        if (lower.endsWith(".png")) return "image/png";
+        if (lower.endsWith(".webp")) return "image/webp";
+        return "image/jpeg";
+    }
+
+    private static String sha1Short(String input) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-1");
+            byte[] dig = md.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 8 && i < dig.length; i++) {
+                sb.append(String.format(Locale.US, "%02x", dig[i]));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(input.hashCode());
+        }
     }
 }

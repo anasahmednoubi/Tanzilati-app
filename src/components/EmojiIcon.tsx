@@ -9,7 +9,8 @@ export type EmojiName =
   | 'download'
   | 'cloud'
   | 'warning'
-  | 'bell';
+  | 'bell'
+  | 'whatsapp';
 
 interface EmojiIconProps {
   name: EmojiName;
@@ -227,6 +228,30 @@ export const EmojiIcon: React.FC<EmojiIconProps> = ({ name, size = 18, className
             />
             <rect x="16.6" y="13" width="2.8" height="9" rx="1.4" fill="#1F2937" />
             <circle cx="18" cy="25.5" r="1.6" fill="#1F2937" />
+          </svg>
+        </span>
+      );
+    }
+
+    case 'whatsapp': {
+      const gradId = `${uidPrefix}_wa`;
+      return (
+        <span className={className} style={wrapStyle} aria-hidden="true">
+          <svg width={size} height={size} viewBox="0 0 36 36" fill="none">
+            <defs>
+              <linearGradient id={gradId} x1="4" y1="4" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#34D399" />
+                <stop offset="100%" stopColor="#16A34A" />
+              </linearGradient>
+            </defs>
+            <path
+              d="M18 3.5C10 3.5 3.5 9.8 3.5 17.6C3.5 20.5 4.4 23.2 6 25.5L4.3 31.7L10.7 30C12.9 31.2 15.4 31.8 18 31.8C26 31.8 32.5 25.5 32.5 17.6C32.5 9.8 26 3.5 18 3.5Z"
+              fill={`url(#${gradId})`}
+            />
+            <path
+              d="M13.3 11.7C13 11.1 12.7 11.1 12.3 11.1H11.5C11.1 11.1 10.6 11.3 10.2 11.8C9.8 12.3 8.8 13.2 8.8 15.1C8.8 17 10.2 18.8 10.4 19.1C10.6 19.4 13.1 23.4 17 24.9C20.2 26.2 20.9 25.9 21.6 25.8C22.3 25.7 23.8 24.9 24.1 24C24.4 23.1 24.4 22.4 24.3 22.2C24.2 22 23.9 21.9 23.4 21.6C22.9 21.4 20.6 20.2 20.1 20.1C19.7 19.9 19.4 19.8 19.1 20.3C18.8 20.8 17.9 21.8 17.6 22.1C17.3 22.4 17.1 22.4 16.6 22.2C16.1 21.9 14.6 21.4 12.9 19.9C11.5 18.7 10.6 17.2 10.3 16.7C10.1 16.2 10.3 16 10.5 15.7C10.7 15.5 11 15.1 11.2 14.8C11.4 14.5 11.5 14.3 11.7 14C11.8 13.7 11.8 13.5 11.6 13.2C11.5 12.9 10.6 10.7 13.3 11.7Z"
+              fill="#FFFFFF"
+            />
           </svg>
         </span>
       );

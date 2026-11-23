@@ -104,6 +104,22 @@ interface DownloadJob {
 
 const jobs = new Map<string, DownloadJob>();
 
+interface CachedMediaEntry {
+  info: MediaInfoResult;
+  cachedAt: number;
+}
+const resolvedInfoCache = new Map<string, CachedMediaEntry>();
+
+function getCachedMediaInfo(key: string): MediaInfoResult | null {
+  const entry = resolvedInfoCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.cachedAt > 8 * 60 * 1000) {
+    resolvedInfoCache.delete(key);
+    return null;
+  }
+  return entry.info;
+}
+
 // Periodic cleanup of expired jobs, preview tokens & temp files (> 20 mins)
 setInterval(() => {
   const now = Date.now();
@@ -173,15 +189,28 @@ function formatBytes(bytes?: number | null, exact = false): string {
   return `${prefix}${Math.max(1, Math.round(kb))} KB`;
 }
 
+function inferCdnReferer(streamUrl?: string): string | undefined {
+  if (!streamUrl) return undefined;
+  const lower = streamUrl.toLowerCase();
+  if (lower.includes('fbcdn.net') || lower.includes('facebook.com')) return 'https://www.facebook.com/';
+  if (lower.includes('cdninstagram.com') || lower.includes('instagram.com')) return 'https://www.instagram.com/';
+  if (lower.includes('tiktok') || lower.includes('muscdn') || lower.includes('byteoversea')) return 'https://www.tiktok.com/';
+  if (lower.includes('twimg.com') || lower.includes('twitter.com') || lower.includes('x.com')) return 'https://x.com/';
+  return undefined;
+}
+
 async function probeContentLength(streamUrl?: string, customUa?: string): Promise<number | undefined> {
   if (!streamUrl) return undefined;
   const ua =
     customUa ||
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+  const referer = inferCdnReferer(streamUrl);
+  const baseHeaders: Record<string, string> = { 'User-Agent': ua };
+  if (referer) baseHeaders.Referer = referer;
   try {
     const head = await fetch(streamUrl, {
       method: 'HEAD',
-      headers: { 'User-Agent': ua },
+      headers: baseHeaders,
       signal: AbortSignal.timeout(3000),
     });
     if (head.ok) {
@@ -189,7 +218,7 @@ async function probeContentLength(streamUrl?: string, customUa?: string): Promis
       if (cl > 0) return cl;
     }
     const rng = await fetch(streamUrl, {
-      headers: { Range: 'bytes=0-0', 'User-Agent': ua },
+      headers: { ...baseHeaders, Range: 'bytes=0-0' },
       signal: AbortSignal.timeout(3000),
     });
     if (rng.ok || rng.status === 206) {
@@ -209,10 +238,23 @@ async function probeContentLength(streamUrl?: string, customUa?: string): Promis
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return '';
+  let extracted = '';
   const match = trimmed.match(/(https?:\/\/[^\s<>"'{}|\\^`]+[^\s<>"'{}|\\^`.,;:!?)\]])/i);
-  if (match) return match[1];
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  return `https://${trimmed}`;
+  if (match) {
+    extracted = match[1];
+  } else if (/^https?:\/\//i.test(trimmed)) {
+    extracted = trimmed;
+  } else {
+    extracted = `https://${trimmed}`;
+  }
+  // Unwrap l.facebook.com / lm.facebook.com external link shims
+  try {
+    const u = new URL(extracted);
+    if ((u.hostname === 'l.facebook.com' || u.hostname === 'lm.facebook.com') && u.searchParams.get('u')) {
+      return u.searchParams.get('u')!;
+    }
+  } catch {}
+  return extracted;
 }
 
 function sanitizeFilename(title: string, ext: string): string {
@@ -302,6 +344,10 @@ function runYtDlpJson(bin: string, targetUrl: string): Promise<any | null> {
       '--no-warnings',
       '--js-runtimes',
       'node',
+      '--user-agent',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      '--add-header',
+      'Accept-Language:en-US,en;q=0.9',
       targetUrl,
     ];
     if (process.env.YT_COOKIES_FILE && fs.existsSync(process.env.YT_COOKIES_FILE)) {
@@ -1003,51 +1049,602 @@ async function resolveYouTubeViaInnerTube(
   }
 }
 
+const DESKTOP_CHROME_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+const MOBILE_CHROME_UA =
+  'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+const FB_EXTERNAL_HIT_UA =
+  'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)';
+
+function unescapeSocialUrl(raw?: string | null): string {
+  if (!raw) return '';
+  return raw
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\\//g, '/')
+    .replace(/\\"/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&#x3A;/gi, ':')
+    .replace(/&#x2F;/gi, '/')
+    .trim();
+}
+
+function decodeHtmlEntities(raw?: string | null): string {
+  if (!raw) return '';
+  return raw
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(parseInt(d, 10)))
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'");
+}
+
+function unwrapFacebookLoginNext(rawUrl?: string | null): string | null {
+  if (!rawUrl) return null;
+  try {
+    const u = new URL(rawUrl);
+    if (/facebook\.com$/i.test(u.hostname) && u.pathname.includes('/login')) {
+      const next = u.searchParams.get('next');
+      if (next && next.startsWith('http')) return next;
+    }
+  } catch {}
+  return null;
+}
+
+async function fetchHtmlWithCookies(
+  targetUrl: string,
+  ua: string,
+  referer?: string
+): Promise<{ html: string; finalUrl: string; loginNextUrl?: string } | null> {
+  const cookieJar = new Map<string, string>();
+  let current = targetUrl;
+  let loginNextUrl: string | undefined;
+
+  for (let hop = 0; hop < 8; hop++) {
+    const nextUnwrapped = unwrapFacebookLoginNext(current);
+    if (nextUnwrapped) {
+      loginNextUrl = nextUnwrapped;
+    }
+    const cookieHeader = Array.from(cookieJar.entries())
+      .map(([k, v]) => `${k}=${v}`)
+      .join('; ');
+    const headers: Record<string, string> = {
+      'User-Agent': ua,
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': referer ? 'same-origin' : 'none',
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1',
+    };
+    if (referer) headers.Referer = referer;
+    if (cookieHeader) headers.Cookie = cookieHeader;
+
+    const res = await fetch(current, {
+      headers,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10000),
+    });
+
+    const getSetCookie = (res.headers as any).getSetCookie?.() as string[] | undefined;
+    const rawSetCookies = getSetCookie || (res.headers.get('set-cookie') ? [res.headers.get('set-cookie')!] : []);
+    for (const sc of rawSetCookies) {
+      const pair = sc.split(';')[0]?.trim();
+      const eq = pair?.indexOf('=');
+      if (pair && eq && eq > 0) {
+        cookieJar.set(pair.slice(0, eq), pair.slice(eq + 1));
+      }
+    }
+
+    if ([301, 302, 303, 307, 308].includes(res.status)) {
+      const loc = res.headers.get('location');
+      if (!loc) break;
+      const nextHop = new URL(loc, current).toString();
+      const unwrapped = unwrapFacebookLoginNext(nextHop);
+      if (unwrapped) loginNextUrl = unwrapped;
+      current = nextHop;
+      continue;
+    }
+
+    if (!res.ok) return loginNextUrl ? { html: '', finalUrl: current, loginNextUrl } : null;
+    const html = await res.text();
+    return { html, finalUrl: current, loginNextUrl };
+  }
+  return loginNextUrl ? { html: '', finalUrl: current, loginNextUrl } : null;
+}
+
+function parseFacebookDashManifest(html: string): {
+  videoUrl?: string;
+  audioUrl?: string;
+  durationSec?: number;
+} {
+  let xml = '';
+  const manifestMatch = html.match(/"dash_manifest(?:_xml_string)?"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
+  if (manifestMatch?.[1]) {
+    try {
+      xml = JSON.parse(`"${manifestMatch[1]}"`);
+    } catch {
+      xml = unescapeSocialUrl(manifestMatch[1]);
+    }
+  } else if (html.includes('<MPD') && html.includes('<BaseURL>')) {
+    xml = unescapeSocialUrl(html);
+  }
+  if (!xml || !xml.includes('<BaseURL>')) return {};
+
+  let durationSec = 0;
+  const durM = xml.match(/mediaPresentationDuration="PT(?:(\d+)H)?(?:(\d+)M)?([\d.]+)S"/i);
+  if (durM) {
+    durationSec = Math.round(
+      (Number(durM[1] || 0) * 3600) +
+      (Number(durM[2] || 0) * 60) +
+      (Number(durM[3] || 0))
+    );
+  }
+
+  let bestAvcVideo: { url: string; score: number } | null = null;
+  let bestAnyVideo: { url: string; score: number } | null = null;
+  let bestAudio: { url: string; score: number } | null = null;
+
+  const adaptSets = Array.from(xml.matchAll(/<AdaptationSet\b([^>]*)>([\s\S]*?)<\/AdaptationSet>/gi));
+  for (const aset of adaptSets) {
+    const asetAttrs = aset[1] || '';
+    const asetBody = aset[2] || '';
+    const isAudioSet = /contentType=["']audio["']|mimeType=["']audio\//i.test(asetAttrs);
+    const isVideoSet = /contentType=["']video["']|mimeType=["']video\//i.test(asetAttrs);
+
+    const reps = Array.from(asetBody.matchAll(/<Representation\b([^>]*)>([\s\S]*?)<\/Representation>/gi));
+    for (const rep of reps) {
+      const repAttrs = rep[1] || '';
+      const repBody = rep[2] || '';
+      const baseMatch = repBody.match(/<BaseURL>([^<]+)<\/BaseURL>/i);
+      if (!baseMatch?.[1]) continue;
+      const baseUrl = decodeHtmlEntities(unescapeSocialUrl(baseMatch[1]));
+      if (!baseUrl.startsWith('http')) continue;
+
+      const bw = Number(repAttrs.match(/bandwidth=["'](\d+)["']/i)?.[1] || 0);
+      const height = Number(repAttrs.match(/height=["'](\d+)["']/i)?.[1] || 0);
+      const codecs = repAttrs.match(/codecs=["']([^"']+)["']/i)?.[1] || '';
+      const mime = repAttrs.match(/mimeType=["']([^"']+)["']/i)?.[1] || '';
+
+      const repIsAudio = isAudioSet || /audio\//i.test(mime) || /mp4a|opus/i.test(codecs);
+      const repIsVideo = isVideoSet || /video\//i.test(mime) || /avc1|av01|vp0?9|hev1|hvc1/i.test(codecs);
+
+      if (repIsAudio && !repIsVideo) {
+        const audioScore = (/mp4a/i.test(codecs) ? 10_000_000 : 0) + bw;
+        if (!bestAudio || audioScore > bestAudio.score) {
+          bestAudio = { url: baseUrl, score: audioScore };
+        }
+      } else if (repIsVideo) {
+        const score = height * 100_000 + bw;
+        if (/avc1/i.test(codecs)) {
+          if (!bestAvcVideo || score > bestAvcVideo.score) {
+            bestAvcVideo = { url: baseUrl, score };
+          }
+        }
+        if (!bestAnyVideo || score > bestAnyVideo.score) {
+          bestAnyVideo = { url: baseUrl, score };
+        }
+      }
+    }
+  }
+
+  const pickedVideo = bestAvcVideo || bestAnyVideo;
+  return {
+    videoUrl: pickedVideo?.url,
+    audioUrl: bestAudio?.url,
+    durationSec: durationSec > 0 ? durationSec : undefined,
+  };
+}
+
+function extractFacebookMediaFromHtml(html: string): {
+  hdUrl?: string;
+  sdUrl?: string;
+  audioUrl?: string;
+  title?: string;
+  thumbnail?: string;
+  durationSec?: number;
+} {
+  const hdPatterns = [
+    /"browser_native_hd_url"\s*:\s*"([^"]+)"/i,
+    /"playable_url_quality_hd"\s*:\s*"([^"]+)"/i,
+    /"hd_src_no_ratelimit"\s*:\s*"([^"]+)"/i,
+    /"hd_src"\s*:\s*"([^"]+)"/i,
+  ];
+  const sdPatterns = [
+    /"browser_native_sd_url"\s*:\s*"([^"]+)"/i,
+    /"playable_url"\s*:\s*"([^"]+)"/i,
+    /"sd_src_no_ratelimit"\s*:\s*"([^"]+)"/i,
+    /"sd_src"\s*:\s*"([^"]+)"/i,
+    /<meta[^>]+property=["']og:video(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:video(?::secure_url)?["']/i,
+  ];
+
+  let hdUrl = '';
+  for (const re of hdPatterns) {
+    const m = html.match(re);
+    if (m?.[1]) {
+      const cand = unescapeSocialUrl(m[1]);
+      if (cand.startsWith('http')) {
+        hdUrl = cand;
+        break;
+      }
+    }
+  }
+
+  let sdUrl = '';
+  for (const re of sdPatterns) {
+    const m = html.match(re);
+    if (m?.[1]) {
+      const cand = unescapeSocialUrl(m[1]);
+      if (cand.startsWith('http')) {
+        sdUrl = cand;
+        break;
+      }
+    }
+  }
+
+  // Modern Facebook GraphQL "progressive_urls" array (quality: HD / SD)
+  if (!hdUrl || !sdUrl) {
+    const progMatches = Array.from(html.matchAll(/"progressive_url"\s*:\s*"([^"]+)"/gi));
+    for (const pm of progMatches) {
+      const rawCand = pm[1];
+      const cand = unescapeSocialUrl(rawCand);
+      if (!cand.startsWith('http')) continue;
+      const start = Math.max(0, (pm.index || 0) - 180);
+      const end = Math.min(html.length, (pm.index || 0) + pm[0].length + 180);
+      const ctx = html.slice(start, end);
+      if (/"quality"\s*:\s*"HD"/i.test(ctx)) {
+        if (!hdUrl) hdUrl = cand;
+      } else if (!sdUrl) {
+        sdUrl = cand;
+      }
+    }
+  }
+
+  // mbasic.facebook.com video redirect link
+  if (!hdUrl && !sdUrl) {
+    const redirMatch = html.match(/\/video_redirect\/\?src=([^"'&<>\s]+)/i);
+    if (redirMatch?.[1]) {
+      try {
+        const decoded = decodeURIComponent(decodeHtmlEntities(redirMatch[1]));
+        if (decoded.startsWith('http')) sdUrl = decoded;
+      } catch {}
+    }
+  }
+
+  // Facebook DASH XML manifest (AdaptationSet-aware video + audio separation)
+  const dash = parseFacebookDashManifest(html);
+  let audioUrl = dash.audioUrl || '';
+  if (!hdUrl && !sdUrl && dash.videoUrl) {
+    sdUrl = dash.videoUrl;
+  } else {
+    // Only attach dash audio if video came from DASH
+    if (hdUrl || sdUrl) audioUrl = '';
+  }
+
+  const msDurMatch = html.match(/"playable_duration_in_ms"\s*:\s*(\d+)/i);
+  const durationSec = msDurMatch?.[1]
+    ? Math.round(Number(msDurMatch[1]) / 1000)
+    : dash.durationSec || 0;
+
+  const ogTitle =
+    html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+    html.match(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+    html.match(/<title>([^<]+)<\/title>/i)?.[1] ||
+    '';
+  const cleanTitle = decodeHtmlEntities(unescapeSocialUrl(ogTitle))
+    .replace(/\s*\|\s*Facebook$/i, '')
+    .trim();
+
+  const ogThumb =
+    html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+    html.match(/"preferred_thumbnail"\s*:\s*\{[^}]*"image"\s*:\s*\{\s*"uri"\s*:\s*"([^"]+)"/i)?.[1] ||
+    '';
+  const cleanThumb = unescapeSocialUrl(decodeHtmlEntities(ogThumb));
+
+  return {
+    hdUrl: hdUrl || undefined,
+    sdUrl: sdUrl || undefined,
+    audioUrl: audioUrl || undefined,
+    title: cleanTitle && !/^facebook$/i.test(cleanTitle) ? cleanTitle.slice(0, 90) : undefined,
+    thumbnail: cleanThumb.startsWith('http') ? cleanThumb : undefined,
+    durationSec: durationSec > 0 ? durationSec : undefined,
+  };
+}
+
+async function resolveFacebook(targetUrl: string): Promise<MediaInfoResult | null> {
+  const candidates: Array<{ url: string; ua: string }> = [];
+  const discoveredUrls: string[] = [targetUrl];
+  let resolvedCanonical = targetUrl;
+
+  const pushCandidate = (url: string, ua: string) => {
+    if (url && url.startsWith('http')) {
+      candidates.push({ url, ua });
+    }
+  };
+
+  // Tier 1: Try target URL with Desktop Chrome UA
+  try {
+    const page1 = await fetchHtmlWithCookies(targetUrl, DESKTOP_CHROME_UA);
+    if (page1) {
+      if (page1.loginNextUrl) {
+        discoveredUrls.push(page1.loginNextUrl);
+        resolvedCanonical = page1.loginNextUrl;
+      } else if (page1.finalUrl) {
+        discoveredUrls.push(page1.finalUrl);
+        resolvedCanonical = page1.finalUrl;
+      }
+
+      if (page1.html) {
+        const direct = extractFacebookMediaFromHtml(page1.html);
+        if (direct.hdUrl || direct.sdUrl) {
+          return await buildFacebookResult(targetUrl, direct);
+        }
+
+        const ogUrl = page1.html.match(/<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i)?.[1];
+        const canonicalTag = page1.html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i)?.[1];
+        const metaRefresh = page1.html.match(/<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"'\s>]+)/i)?.[1];
+        for (const rawCanon of [ogUrl, canonicalTag, metaRefresh]) {
+          const cleanCanon = unescapeSocialUrl(decodeHtmlEntities(rawCanon));
+          if (cleanCanon.startsWith('http') && !cleanCanon.includes('/login')) {
+            discoveredUrls.push(cleanCanon);
+            if (resolvedCanonical === targetUrl || resolvedCanonical.includes('/share/') || resolvedCanonical.includes('/login')) {
+              resolvedCanonical = cleanCanon;
+            }
+          }
+        }
+
+        // Extract embedded reel/video IDs or URLs from share interstitial HTML JSON
+        const bodyIdMatch = page1.html.match(
+          /"(?:video_id|story_fbid|shareable_id)"\s*:\s*"(\d{8,})"|facebook\.com(?:\\)?\/(?:reel|videos)(?:\\)?\/(\d{8,})/i
+        );
+        const bodyVidId = bodyIdMatch?.[1] || bodyIdMatch?.[2];
+        if (bodyVidId) {
+          discoveredUrls.push(`https://www.facebook.com/watch/?v=${bodyVidId}`);
+          discoveredUrls.push(`https://www.facebook.com/reel/${bodyVidId}`);
+        }
+      }
+    }
+  } catch {}
+
+  // Build prioritized fallbacks: plugins/video.php (~215 KB) & facebookexternalhit (~890 KB, avoids login splash)
+  const bestNonLoginUrl =
+    discoveredUrls.find((u) => /\/(?:reel|videos|watch)/i.test(u) && !u.includes('/login')) ||
+    (resolvedCanonical.includes('/login') ? targetUrl : resolvedCanonical);
+
+  if (!bestNonLoginUrl.includes('plugins/video.php')) {
+    const plugUrl = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(bestNonLoginUrl)}&show_text=0&width=560`;
+    pushCandidate(plugUrl, DESKTOP_CHROME_UA);
+    pushCandidate(plugUrl, FB_EXTERNAL_HIT_UA);
+  }
+
+  pushCandidate(bestNonLoginUrl, FB_EXTERNAL_HIT_UA);
+  if (bestNonLoginUrl !== targetUrl) {
+    pushCandidate(targetUrl, FB_EXTERNAL_HIT_UA);
+    pushCandidate(bestNonLoginUrl, DESKTOP_CHROME_UA);
+  }
+
+  const idMatch = discoveredUrls
+    .join(' ')
+    .match(/(?:\/(?:videos?|reel|reels|stories)\/|story_fbid=|watch\/?\?v=)(\d{8,})/i);
+  if (idMatch?.[1]) {
+    const vid = idMatch[1];
+    const watchPlug = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(`https://www.facebook.com/watch/?v=${vid}`)}&show_text=0&width=560`;
+    pushCandidate(watchPlug, DESKTOP_CHROME_UA);
+    pushCandidate(`https://www.facebook.com/watch/?v=${vid}`, FB_EXTERNAL_HIT_UA);
+    pushCandidate(`https://www.facebook.com/watch/?v=${vid}`, DESKTOP_CHROME_UA);
+    pushCandidate(`https://www.facebook.com/reel/${vid}`, FB_EXTERNAL_HIT_UA);
+    pushCandidate(`https://mbasic.facebook.com/watch/?v=${vid}`, MOBILE_CHROME_UA);
+  }
+
+  try {
+    const u = new URL(bestNonLoginUrl);
+    if (!u.hostname.startsWith('mbasic.')) {
+      u.hostname = 'mbasic.facebook.com';
+      pushCandidate(u.toString(), MOBILE_CHROME_UA);
+    }
+  } catch {}
+
+  const seen = new Set<string>();
+  for (const cand of candidates) {
+    const key = `${cand.ua}::${cand.url}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const res = await fetchHtmlWithCookies(cand.url, cand.ua, 'https://www.facebook.com/');
+      if (!res?.html) continue;
+      const extracted = extractFacebookMediaFromHtml(res.html);
+      if (extracted.hdUrl || extracted.sdUrl) {
+        return await buildFacebookResult(targetUrl, extracted);
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+async function buildFacebookResult(
+  originalUrl: string,
+  extracted: {
+    hdUrl?: string;
+    sdUrl?: string;
+    audioUrl?: string;
+    title?: string;
+    thumbnail?: string;
+    durationSec?: number;
+  }
+): Promise<MediaInfoResult> {
+  const bestStream = extracted.hdUrl || extracted.sdUrl!;
+  const sdStream = extracted.sdUrl || extracted.hdUrl!;
+  const [hdBytes, sdBytes] = await Promise.all([
+    probeContentLength(bestStream, DESKTOP_CHROME_UA),
+    sdStream !== bestStream ? probeContentLength(sdStream, DESKTOP_CHROME_UA) : Promise.resolve(undefined),
+  ]);
+
+  const videoOptions: FormatOption[] = [];
+  if (extracted.hdUrl) {
+    videoOptions.push({
+      key: 'best',
+      labelAr: 'جودة عالية (HD · MP4)',
+      labelEn: 'High Quality (HD · MP4)',
+      descAr: 'MP4 · أعلى دقة من فيسبوك',
+      descEn: 'MP4 · Facebook HD',
+      sizeText: hdBytes ? formatBytes(hdBytes, true) : '—',
+      sizeBytes: hdBytes,
+      height: 1080,
+      directUrl: extracted.hdUrl,
+      audioUrl: extracted.audioUrl,
+      userAgent: DESKTOP_CHROME_UA,
+    });
+  }
+  if (extracted.sdUrl && extracted.sdUrl !== extracted.hdUrl) {
+    videoOptions.push({
+      key: extracted.hdUrl ? '480' : 'best',
+      labelAr: extracted.hdUrl ? 'جودة قياسية (SD · MP4)' : 'أفضل جودة متاحة (MP4)',
+      labelEn: extracted.hdUrl ? 'Standard Quality (SD · MP4)' : 'Best Available (MP4)',
+      descAr: extracted.hdUrl ? 'MP4 · حجم أقل' : 'MP4 · حفظ مباشر',
+      descEn: extracted.hdUrl ? 'MP4 · Compact Size' : 'MP4 · Direct Save',
+      sizeText: sdBytes ? formatBytes(sdBytes, true) : '—',
+      sizeBytes: sdBytes,
+      height: 480,
+      directUrl: extracted.sdUrl,
+      audioUrl: extracted.audioUrl,
+      userAgent: DESKTOP_CHROME_UA,
+    });
+  }
+
+  const durSec = extracted.durationSec || 0;
+  const audioSrc = extracted.audioUrl || sdStream;
+  return {
+    url: originalUrl,
+    title: extracted.title || 'Facebook Video',
+    author: 'Facebook',
+    duration: durSec > 0 ? formatDuration(durSec) : '—',
+    durationSec: durSec,
+    thumbnail: extracted.thumbnail || '',
+    platformAr: 'فيسبوك',
+    platformEn: 'Facebook',
+    engine: 'direct',
+    videoOptions,
+    audioOptions: defaultAudioOptions(durSec),
+    fallbackStreamUrl: bestStream,
+    fallbackAudioUrl: audioSrc,
+    previewUrl: sdStream,
+    userAgent: DESKTOP_CHROME_UA,
+  };
+}
+
+async function resolveInstagram(targetUrl: string): Promise<MediaInfoResult | null> {
+  try {
+    const res1 = await fetchHtmlWithCookies(targetUrl, DESKTOP_CHROME_UA);
+    const finalUrl = res1?.finalUrl || targetUrl;
+    const html1 = res1?.html || '';
+
+    const scMatch = finalUrl.match(/\/(reel|reels|p|tv)\/([A-Za-z0-9_-]+)/i);
+    const htmls: string[] = [];
+    if (html1) htmls.push(html1);
+
+    if (scMatch) {
+      const embedPaths = [
+        `https://www.instagram.com/${scMatch[1]}/${scMatch[2]}/embed/captioned/`,
+        `https://www.instagram.com/${scMatch[1]}/${scMatch[2]}/embed/`,
+      ];
+      for (const ep of embedPaths) {
+        try {
+          const er = await fetchHtmlWithCookies(ep, DESKTOP_CHROME_UA, 'https://www.instagram.com/');
+          if (er?.html) htmls.push(er.html);
+        } catch {}
+      }
+    }
+
+    for (const h of htmls) {
+      const match = h.match(
+        /<meta[^>]+property=["']og:video(?::secure_url)?["'][^>]+content=["']([^"']+)["']|"video_url"\s*:\s*"([^"]+)"|<video[^>]+src=["']([^"']+)["']/i
+      );
+      const rawStream = match?.[1] || match?.[2] || match?.[3];
+      if (!rawStream) continue;
+      const cleanStream = unescapeSocialUrl(decodeHtmlEntities(rawStream));
+      if (!cleanStream.startsWith('http')) continue;
+
+      const size = await probeContentLength(cleanStream, DESKTOP_CHROME_UA);
+      const titleMatch = h.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']|<title>([^<]+)<\/title>/i);
+      const thumbMatch = h.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+      return {
+        url: targetUrl,
+        title: decodeHtmlEntities(titleMatch?.[1] || titleMatch?.[2] || 'Instagram Video').slice(0, 85),
+        author: 'Instagram',
+        duration: '—',
+        durationSec: 0,
+        thumbnail: unescapeSocialUrl(decodeHtmlEntities(thumbMatch?.[1] || '')),
+        platformAr: 'إنستغرام',
+        platformEn: 'Instagram',
+        engine: 'direct',
+        videoOptions: [
+          {
+            key: 'best',
+            labelAr: 'أفضل جودة متاحة (MP4)',
+            labelEn: 'Best Available Quality (MP4)',
+            descAr: 'MP4 · حفظ مباشر',
+            descEn: 'MP4 · Direct Save',
+            sizeText: size ? formatBytes(size, true) : '—',
+            sizeBytes: size,
+            directUrl: cleanStream,
+            userAgent: DESKTOP_CHROME_UA,
+          },
+        ],
+        audioOptions: defaultAudioOptions(0),
+        fallbackStreamUrl: cleanStream,
+        fallbackAudioUrl: cleanStream,
+        previewUrl: cleanStream,
+        userAgent: DESKTOP_CHROME_UA,
+      };
+    }
+  } catch {}
+  return null;
+}
+
 async function resolveSocialHtmlFallback(targetUrl: string): Promise<MediaInfoResult | null> {
   try {
-    const mobileUA =
-      'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
-    const res = await fetch(targetUrl, {
-      headers: { 'User-Agent': mobileUA },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(7000),
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
+    const fetched = await fetchHtmlWithCookies(targetUrl, MOBILE_CHROME_UA);
+    if (!fetched) return null;
+    const html = fetched.html;
     const match = html.match(
-      /<meta[^>]+property=["']og:video(?::secure_url)?["'][^>]+content=["']([^"']+)["']|"playable_url_quality_hd"\s*:\s*"([^"]+)"|"playable_url"\s*:\s*"([^"]+)"|"video_url"\s*:\s*"([^"]+)"/i
+      /<meta[^>]+property=["']og:video(?::secure_url)?["'][^>]+content=["']([^"']+)["']|"playable_url_quality_hd"\s*:\s*"([^"]+)"|"playable_url"\s*:\s*"([^"]+)"|"video_url"\s*:\s*"([^"]+)"|"contentUrl"\s*:\s*"([^"]+)"/i
     );
-    const rawStream = match?.[1] || match?.[2] || match?.[3] || match?.[4];
+    const rawStream = match?.[1] || match?.[2] || match?.[3] || match?.[4] || match?.[5];
     if (!rawStream) return null;
-    const cleanStream = rawStream
-      .replace(/\\\//g, '/')
-      .replace(/\\u0026/g, '&')
-      .replace(/&amp;/g, '&');
+    const cleanStream = unescapeSocialUrl(decodeHtmlEntities(rawStream));
     if (!cleanStream.startsWith('http')) return null;
 
-    const probedSize = await probeContentLength(cleanStream, mobileUA);
+    const probedSize = await probeContentLength(cleanStream, MOBILE_CHROME_UA);
 
-    const titleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+    const titleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']|<title>([^<]+)<\/title>/i);
     const thumbMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
-    const lower = targetUrl.toLowerCase();
+    const lower = (fetched.finalUrl || targetUrl).toLowerCase();
     const platAr = lower.includes('instagram.com')
       ? 'إنستغرام'
-      : lower.includes('facebook.com') || lower.includes('fb.watch')
+      : lower.includes('facebook.com') || lower.includes('fb.watch') || lower.includes('fb.com')
         ? 'فيسبوك'
-        : 'فيديو';
+        : lower.includes('threads.')
+          ? 'ثريدز'
+          : 'فيديو';
     const platEn = lower.includes('instagram.com')
       ? 'Instagram'
-      : lower.includes('facebook.com') || lower.includes('fb.watch')
+      : lower.includes('facebook.com') || lower.includes('fb.watch') || lower.includes('fb.com')
         ? 'Facebook'
-        : 'Video';
+        : lower.includes('threads.')
+          ? 'Threads'
+          : 'Video';
 
     return {
       url: targetUrl,
-      title: (titleMatch?.[1] || `${platEn} Video`).slice(0, 80),
+      title: decodeHtmlEntities(titleMatch?.[1] || titleMatch?.[2] || `${platEn} Video`).slice(0, 80),
       author: platEn,
       duration: '—',
       durationSec: 0,
-      thumbnail: thumbMatch?.[1]?.replace(/&amp;/g, '&') || '',
+      thumbnail: unescapeSocialUrl(decodeHtmlEntities(thumbMatch?.[1] || '')),
       platformAr: platAr,
       platformEn: platEn,
       engine: 'direct',
@@ -1061,14 +1658,14 @@ async function resolveSocialHtmlFallback(targetUrl: string): Promise<MediaInfoRe
           sizeText: probedSize ? formatBytes(probedSize, true) : '—',
           sizeBytes: probedSize,
           directUrl: cleanStream,
-          userAgent: mobileUA,
+          userAgent: MOBILE_CHROME_UA,
         },
       ],
       audioOptions: defaultAudioOptions(0),
       fallbackStreamUrl: cleanStream,
       fallbackAudioUrl: cleanStream,
       previewUrl: cleanStream,
-      userAgent: mobileUA,
+      userAgent: MOBILE_CHROME_UA,
     };
   } catch {
     return null;
@@ -1094,38 +1691,67 @@ async function resolveMediaInfo(rawUrl: string): Promise<MediaInfoResult> {
     if (tw) return tw;
   }
 
-  // 3. Direct .mp4 / .mp3 / video/* / audio/* links
+  // 3. Facebook multi-tier extractor (handles share/r, share/v, fb.watch, fb.me, Reels, Watch, mbasic, plugins/video.php)
+  if (
+    lower.includes('facebook.com') ||
+    lower.includes('fb.watch') ||
+    lower.includes('fb.com') ||
+    lower.includes('fb.me')
+  ) {
+    const fb = await resolveFacebook(targetUrl);
+    if (fb) return fb;
+  }
+
+  // 4. Instagram multi-tier extractor (/reel/, /p/, /share/, /embed/)
+  if (lower.includes('instagram.com') || lower.includes('instagr.am')) {
+    const ig = await resolveInstagram(targetUrl);
+    if (ig) return ig;
+  }
+
+  // 5. Direct .mp4 / .mp3 / video/* / audio/* links
   if (/\.(mp4|webm|mov|mp3|m4a|opus|ogg|wav)(\?|$)/i.test(lower)) {
     const direct = await resolveDirectMedia(targetUrl);
     if (direct) return direct;
   }
 
-  // 4. YouTube fast InnerTube resolver first (direct playable MP4/M4A URLs)
+  // 6. YouTube fast InnerTube resolver first (direct playable MP4/M4A URLs)
   if (ytId) {
     const inner = await resolveYouTubeViaInnerTube(ytId, targetUrl);
     if (inner) return inner;
   }
 
-  // 5. Try yt-dlp (supports 1000+ platforms including Instagram, Facebook, Reddit, SoundCloud, Vimeo, YouTube)
+  // 7. Try yt-dlp (supports 1000+ platforms including Facebook, Instagram, Reddit, SoundCloud, Vimeo, YouTube)
   const ytDlpBin = await ensureYtDlp();
   if (ytDlpBin) {
-    const raw = await runYtDlpJson(ytDlpBin, targetUrl);
+    // Resolve canonical URL first if short share link so yt-dlp extractor matches cleanly
+    let ytdlpUrl = targetUrl;
+    if (/fb\.watch|fb\.me|facebook\.com\/share\/|instagram\.com\/share\/|vm\.tiktok\.com|vt\.tiktok\.com|t\.co\//i.test(targetUrl)) {
+      try {
+        const hopped = await fetchHtmlWithCookies(targetUrl, FB_EXTERNAL_HIT_UA);
+        if (hopped?.loginNextUrl) {
+          ytdlpUrl = hopped.loginNextUrl;
+        } else if (hopped?.finalUrl && !hopped.finalUrl.includes('/login')) {
+          ytdlpUrl = hopped.finalUrl;
+        }
+      } catch {}
+    }
+    const raw = await runYtDlpJson(ytDlpBin, ytdlpUrl);
     if (raw) {
-      return buildYtDlpMediaInfo(targetUrl, raw);
+      return buildYtDlpMediaInfo(ytdlpUrl, raw);
     }
   }
 
-  // 6. YouTube fallback via healthy Piped APIs
+  // 8. YouTube fallback via healthy Piped APIs
   if (ytId) {
     const piped = await resolveYouTubeViaPiped(ytId, targetUrl);
     if (piped) return piped;
   }
 
-  // 7. Social HTML OG video extractor (Instagram / Facebook / Reddit)
+  // 9. Generic Social HTML OG video extractor
   const htmlSocial = await resolveSocialHtmlFallback(targetUrl);
   if (htmlSocial) return htmlSocial;
 
-  // 8. Direct media probe fallback for non-extension URLs
+  // 10. Direct media probe fallback for non-extension URLs
   const direct = await resolveDirectMedia(targetUrl);
   if (direct) return direct;
 
@@ -1170,14 +1796,32 @@ async function downloadStreamToFile(
   const controller = new AbortController();
   job.abortController = controller;
 
-  const res = await fetch(streamUrl, {
-    headers: {
-      'User-Agent':
-        customUserAgent ||
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-    },
+  const referer = inferCdnReferer(streamUrl);
+  const headers: Record<string, string> = {
+    'User-Agent': customUserAgent || DESKTOP_CHROME_UA,
+    'Accept-Language': 'en-US,en;q=0.9',
+  };
+  if (referer) headers.Referer = referer;
+
+  let res = await fetch(streamUrl, {
+    headers,
     signal: controller.signal,
   });
+
+  if (res.status === 403 || res.status === 400) {
+    const retryConfigs: Record<string, string>[] = [
+      { 'User-Agent': FB_EXTERNAL_HIT_UA, 'Accept-Language': 'en-US,en;q=0.9' },
+      { 'User-Agent': MOBILE_CHROME_UA, 'Accept-Language': 'en-US,en;q=0.9' },
+      { 'User-Agent': DESKTOP_CHROME_UA, 'Accept-Language': 'en-US,en;q=0.9' },
+    ];
+    for (const altHeaders of retryConfigs) {
+      res = await fetch(streamUrl, {
+        headers: altHeaders,
+        signal: controller.signal,
+      });
+      if (res.ok && res.body) break;
+    }
+  }
 
   if (!res.ok || !res.body) {
     throw new Error(`HTTP ${res.status}`);
@@ -1249,83 +1893,91 @@ async function processDownloadJob(
   await fsp.mkdir(workDir, { recursive: true });
 
   try {
-    // Direct / Piped / TikWM / FxTwitter direct-stream engines
+    // Direct / Piped / TikWM / FxTwitter direct-stream engines (with automatic yt-dlp fallback on stream error)
     if (info.engine !== 'yt-dlp') {
-      if (mode === 'video') {
-        const chosen =
-          info.videoOptions.find((v) => v.key === qualityKey) || info.videoOptions[0];
-        const videoStreamUrl = chosen?.directUrl || info.fallbackStreamUrl;
-        if (!videoStreamUrl) throw new Error('NO_STREAM');
+      try {
+        if (mode === 'video') {
+          const chosen =
+            info.videoOptions.find((v) => v.key === qualityKey) || info.videoOptions[0];
+          const videoStreamUrl = chosen?.directUrl || info.fallbackStreamUrl;
+          if (!videoStreamUrl) throw new Error('NO_STREAM');
 
-        const finalPath = path.join(workDir, job.filename);
-        job.status = 'downloading';
-        job.phase = 'downloading';
+          const finalPath = path.join(workDir, job.filename);
+          job.status = 'downloading';
+          job.phase = 'downloading';
 
-        const ua = chosen?.userAgent || info.userAgent;
+          const ua = chosen?.userAgent || info.userAgent;
 
-        if (chosen?.audioUrl && chosen.audioUrl !== videoStreamUrl) {
-          // Adaptive separate video + audio -> download both & mux via ffmpeg
-          const vTmp = path.join(workDir, 'video.mp4');
-          const aTmp = path.join(workDir, 'audio.m4a');
-          await downloadStreamToFile(videoStreamUrl, vTmp, job, 2, 70, ua);
-          await downloadStreamToFile(chosen.audioUrl, aTmp, job, 70, 90, ua);
+          if (chosen?.audioUrl && chosen.audioUrl !== videoStreamUrl) {
+            // Adaptive separate video + audio -> download both & mux via ffmpeg
+            const vTmp = path.join(workDir, 'video.mp4');
+            const aTmp = path.join(workDir, 'audio.m4a');
+            await downloadStreamToFile(videoStreamUrl, vTmp, job, 2, 70, ua);
+            await downloadStreamToFile(chosen.audioUrl, aTmp, job, 70, 90, ua);
+            job.status = 'extracting';
+            job.phase = 'extracting';
+            job.etaSec = 2;
+            await runFfmpeg(
+              ['-y', '-i', vTmp, '-i', aTmp, '-c', 'copy', '-movflags', '+faststart', finalPath],
+              job.abortController?.signal
+            );
+            await fsp.unlink(vTmp).catch(() => {});
+            await fsp.unlink(aTmp).catch(() => {});
+          } else {
+            await downloadStreamToFile(videoStreamUrl, finalPath, job, 2, 99, ua);
+          }
+
+          const stat = await fsp.stat(finalPath);
+          job.filePath = finalPath;
+          job.fileSize = stat.size;
+          job.progress = 100;
+          job.etaSec = 0;
+          job.status = 'ready';
+          job.phase = 'complete';
+          return;
+        } else {
+          // Audio extraction via ffmpeg
+          const sourceUrl = info.fallbackAudioUrl || info.fallbackStreamUrl || info.videoOptions[0]?.directUrl;
+          if (!sourceUrl) throw new Error('NO_AUDIO_STREAM');
+
+          const rawTmp = path.join(workDir, 'source.media');
+          const finalPath = path.join(workDir, job.filename);
+
+          job.status = 'downloading';
+          job.phase = 'downloading';
+          await downloadStreamToFile(sourceUrl, rawTmp, job, 2, 78, info.userAgent);
+
           job.status = 'extracting';
           job.phase = 'extracting';
+          job.progress = 84;
           job.etaSec = 2;
-          await runFfmpeg(
-            ['-y', '-i', vTmp, '-i', aTmp, '-c', 'copy', '-movflags', '+faststart', finalPath],
-            job.abortController?.signal
-          );
-          await fsp.unlink(vTmp).catch(() => {});
-          await fsp.unlink(aTmp).catch(() => {});
-        } else {
-          await downloadStreamToFile(videoStreamUrl, finalPath, job, 2, 99, ua);
+
+          const ffmpegAudioArgs: Record<string, string[]> = {
+            'mp3-320': ['-vn', '-c:a', 'libmp3lame', '-b:a', '320k', finalPath],
+            'mp3-192': ['-vn', '-c:a', 'libmp3lame', '-b:a', '192k', finalPath],
+            m4a: ['-vn', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', finalPath],
+            opus: ['-vn', '-c:a', 'libopus', '-b:a', '128k', finalPath],
+          };
+
+          const codecArgs = ffmpegAudioArgs[qualityKey] || ffmpegAudioArgs['mp3-192'];
+          await runFfmpeg(['-y', '-i', rawTmp, ...codecArgs], job.abortController?.signal);
+          await fsp.unlink(rawTmp).catch(() => {});
+
+          const stat = await fsp.stat(finalPath);
+          job.filePath = finalPath;
+          job.fileSize = stat.size;
+          job.progress = 100;
+          job.etaSec = 0;
+          job.status = 'ready';
+          job.phase = 'complete';
+          return;
         }
-
-        const stat = await fsp.stat(finalPath);
-        job.filePath = finalPath;
-        job.fileSize = stat.size;
-        job.progress = 100;
-        job.etaSec = 0;
-        job.status = 'ready';
-        job.phase = 'complete';
-        return;
-      } else {
-        // Audio extraction via ffmpeg
-        const sourceUrl = info.fallbackAudioUrl || info.fallbackStreamUrl || info.videoOptions[0]?.directUrl;
-        if (!sourceUrl) throw new Error('NO_AUDIO_STREAM');
-
-        const rawTmp = path.join(workDir, 'source.media');
-        const finalPath = path.join(workDir, job.filename);
-
-        job.status = 'downloading';
-        job.phase = 'downloading';
-        await downloadStreamToFile(sourceUrl, rawTmp, job, 2, 78, info.userAgent);
-
-        job.status = 'extracting';
-        job.phase = 'extracting';
-        job.progress = 84;
-        job.etaSec = 2;
-
-        const ffmpegAudioArgs: Record<string, string[]> = {
-          'mp3-320': ['-vn', '-c:a', 'libmp3lame', '-b:a', '320k', finalPath],
-          'mp3-192': ['-vn', '-c:a', 'libmp3lame', '-b:a', '192k', finalPath],
-          m4a: ['-vn', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', finalPath],
-          opus: ['-vn', '-c:a', 'libopus', '-b:a', '128k', finalPath],
-        };
-
-        const codecArgs = ffmpegAudioArgs[qualityKey] || ffmpegAudioArgs['mp3-192'];
-        await runFfmpeg(['-y', '-i', rawTmp, ...codecArgs], job.abortController?.signal);
-        await fsp.unlink(rawTmp).catch(() => {});
-
-        const stat = await fsp.stat(finalPath);
-        job.filePath = finalPath;
-        job.fileSize = stat.size;
-        job.progress = 100;
-        job.etaSec = 0;
-        job.status = 'ready';
-        job.phase = 'complete';
-        return;
+      } catch (directErr: any) {
+        if (job.status === 'cancelled' || directErr?.message === 'CANCELLED') {
+          throw directErr;
+        }
+        // Invalidate stale cache and fall through to yt-dlp engine below
+        resolvedInfoCache.delete(normalizeUrl(info.url));
       }
     }
 
@@ -1341,6 +1993,10 @@ async function processDownloadJob(
       '--no-warnings',
       '--js-runtimes',
       'node',
+      '--user-agent',
+      DESKTOP_CHROME_UA,
+      '--add-header',
+      'Accept-Language:en-US,en;q=0.9',
       '-o',
       outTemplate,
     ];
@@ -1478,6 +2134,10 @@ async function startServer() {
         return;
       }
       const info = await resolveMediaInfo(rawUrl);
+      const cacheKey = normalizeUrl(rawUrl);
+      if (cacheKey) {
+        resolvedInfoCache.set(cacheKey, { info, cachedAt: Date.now() });
+      }
       const previewProxy = registerPreviewStream(info.previewUrl, info.userAgent);
       res.json({
         url: info.url,
@@ -1527,17 +2187,24 @@ async function startServer() {
     }
     try {
       const headers: Record<string, string> = {
-        'User-Agent':
-          entry.userAgent ||
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'User-Agent': entry.userAgent || DESKTOP_CHROME_UA,
       };
+      const referer = inferCdnReferer(entry.url);
+      if (referer) {
+        headers.Referer = referer;
+      }
       if (req.headers.range) {
         headers.Range = String(req.headers.range);
       }
-      const upstream = await fetch(entry.url, {
+      let upstream = await fetch(entry.url, {
         headers,
         signal: AbortSignal.timeout(20000),
       });
+      if (upstream.status === 403 || upstream.status === 400) {
+        const retryH: Record<string, string> = { 'User-Agent': FB_EXTERNAL_HIT_UA };
+        if (req.headers.range) retryH.Range = String(req.headers.range);
+        upstream = await fetch(entry.url, { headers: retryH, signal: AbortSignal.timeout(20000) });
+      }
       if (!upstream.ok && upstream.status !== 206) {
         res.status(upstream.status).end();
         return;
@@ -1577,7 +2244,11 @@ async function startServer() {
         return;
       }
 
-      const info = await resolveMediaInfo(rawUrl);
+      const cacheKey = normalizeUrl(rawUrl);
+      const info = (cacheKey ? getCachedMediaInfo(cacheKey) : null) || (await resolveMediaInfo(rawUrl));
+      if (cacheKey) {
+        resolvedInfoCache.set(cacheKey, { info, cachedAt: Date.now() });
+      }
       const ext =
         mode === 'audio'
           ? qualityKey === 'm4a'

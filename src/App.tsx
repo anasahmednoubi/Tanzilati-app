@@ -2023,7 +2023,7 @@ export default function App() {
   // Tab Switcher with Direction
   const switchTab = (nextTab: 'D' | 'W' | 'S' | 'H') => {
     if (nextTab === curTab) return;
-    const tabOrder = ['D', 'W', 'S', 'H'];
+    const tabOrder = ['D', 'S', 'W', 'H'];
     const isForward = tabOrder.indexOf(nextTab) > tabOrder.indexOf(curTab);
     const dir = lang === 'ar' ? (isForward ? 'in-l' : 'in-r') : isForward ? 'in-r' : 'in-l';
     setTabDirection(dir);
@@ -2106,7 +2106,7 @@ export default function App() {
       const dy = e.changedTouches[0].clientY - sy;
       sx = null;
       if (!ok || Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.3) return;
-      const order = ['D', 'W', 'S', 'H'] as const;
+      const order = ['D', 'S', 'W', 'H'] as const;
       const i = order.indexOf(curTabRef.current);
       const forward = langRef.current === 'en' ? dx < 0 : dx > 0;
       const next = order[i + (forward ? 1 : -1)];
@@ -4611,30 +4611,6 @@ export default function App() {
           </button>
 
           <button
-            id="tW"
-            className={curTab === 'W' ? 'on' : ''}
-            aria-label={t.navStatuses}
-            role="tab"
-            aria-selected={curTab === 'W'}
-            onClick={() => switchTab('W')}
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.1"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-            </svg>
-            <span className="tn">{t.navStatuses}</span>
-          </button>
-
-          <button
             id="tS"
             className={curTab === 'S' ? 'on' : ''}
             aria-label={t.navHistory}
@@ -4672,6 +4648,30 @@ export default function App() {
               <path d="M3 3v5h5M12 7v5l3 2" />
             </svg>
             <span className="tn">{t.navHistory}</span>
+          </button>
+
+          <button
+            id="tW"
+            className={curTab === 'W' ? 'on' : ''}
+            aria-label={t.navStatuses}
+            role="tab"
+            aria-selected={curTab === 'W'}
+            onClick={() => switchTab('W')}
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.1"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            </svg>
+            <span className="tn">{t.navStatuses}</span>
           </button>
         </div>
 
